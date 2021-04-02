@@ -1,0 +1,21 @@
+[package]
+name = "scratchers"
+version = "0.1.0"
+authors = ["Oleg Andreev <ooandreev@yandex-team.ru>"]
+edition = "2018"
+
+[profile.bench]
+debug = true
+
+[[bench]]
+name = "threadpool"
+harness = false
+
+[dependencies]
+futures = "^0.3"
+parking_lot = "^0.11"
+rayon = "^1.5"
+tokio = { version = "^1.4", features = ["full"] }
+
+[dev-dependencies]
+criterion = { version = "^0.3", features = ["html_reports"] }
