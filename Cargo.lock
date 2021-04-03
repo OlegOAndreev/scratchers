@@ -633,6 +633,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures",
+ "num_cpus",
  "parking_lot",
  "rayon",
  "tokio",

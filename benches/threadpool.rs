@@ -119,14 +119,23 @@ fn rayon_chained_job<'a>(s: &rayon::Scope<'a>, job_size: i64, left_jobs: usize, 
 }
 
 // Spawns the next job after the previous one completes via rayon.
-fn rayon_chained(job_size: i64, num_jobs: usize, result: i64) {
-    let ret = AtomicI64::new(0);
+fn rayon_chained(job_size: i64, num_jobs: usize, parallelism: usize, result: i64) {
+    let mut ret = vec![];
+    for _ in 0..parallelism {
+        ret.push(AtomicI64::new(0));
+    }
     rayon::scope(|s| {
-        s.spawn(|s| rayon_chained_job(s, job_size, num_jobs, 0, &ret));
+        for i in 0..parallelism {
+            let ret = &ret[i];
+            s.spawn(move |s| rayon_chained_job(s, job_size, num_jobs, 0, ret));
+        }
     });
-    assert_eq!(ret.load(Ordering::Relaxed), result);
+    for i in 0..parallelism {
+        assert_eq!(ret[i].load(Ordering::Relaxed), result);
+    }
 }
 
+// Spawns the next job after the previous one completes via tokio.
 fn tokio_chained_future(job_size: i64, left_jobs: usize) -> BoxFuture<'static, i64> {
     async move {
         let v = simple_job(job_size, left_jobs - 1) as i64;
@@ -138,12 +147,25 @@ fn tokio_chained_future(job_size: i64, left_jobs: usize) -> BoxFuture<'static, i
     }.boxed()
 }
 
-
+// See comment for tokio_simple_future.
+async fn get_handles(handles: Vec<JoinHandle<i64>>) -> Vec<i64> {
+    let mut ret = Vec::with_capacity(handles.len());
+    for handle in handles {
+        ret.push(handle.await.unwrap());
+    }
+    ret
+}
 
 // Spawns the next job after the previous one completes via tokio.
-fn tokio_chained(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, result: i64) {
-    let ret = rt.block_on(tokio_chained_future(job_size, num_jobs));
-    assert_eq!(ret, result);
+fn tokio_chained(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, parallelism: usize, result: i64) {
+    let mut handles = Vec::with_capacity(num_jobs);
+    for _ in 0..parallelism {
+        handles.push(rt.spawn(tokio_chained_future(job_size, num_jobs)));
+    }
+    let ret = rt.block_on(get_handles(handles));
+    for v in &ret {
+        assert_eq!(*v, result);
+    }
 }
 
 fn run_simple_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i64) {
@@ -161,28 +183,40 @@ fn run_simple_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i
     group.finish();
 }
 
-fn run_chained_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i64) {
+fn run_chained_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i64, parallelism: usize) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("chained job_size={}", job_size));
+    let mut group = c.benchmark_group(format!("chained parallel={} job_size={}", parallelism, job_size));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
-    group.sample_size(10)
-        .bench_function("single thread", |b| b.iter(|| single_threaded(black_box(job_size), NUM_JOBS)));
-    group.bench_function("rayon", |b| b.iter(|| rayon_chained(black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("tokio", |b| b.iter(|| tokio_chained(rt, black_box(job_size), NUM_JOBS, result)));
+    if parallelism == 1 {
+        group.sample_size(10)
+            .bench_function("single thread", |b| b.iter(|| single_threaded(black_box(job_size), NUM_JOBS)));
+    }
+    group.bench_function("rayon", |b| b.iter(|| rayon_chained(black_box(job_size), NUM_JOBS, parallelism, result)));
+    group.bench_function("tokio", |b| b.iter(|| tokio_chained(rt, black_box(job_size), NUM_JOBS, parallelism, result)));
     group.finish();
 }
 
 fn threadpool_simple_benchmark(c: &mut Criterion) {
+    let ncpu = num_cpus::get_physical();
+    // rayon::ThreadPoolBuilder::new()
+    //     .num_threads(ncpu)
+    //     .build_global()
+    //     .unwrap();
+
     let rt = tokio::runtime::Runtime::new().unwrap();
     run_simple_bench(c, &rt, 10);
     run_simple_bench(c, &rt, 100);
     run_simple_bench(c, &rt, 1000);
     run_simple_bench(c, &rt, 10000);
 
-    run_chained_bench(c, &rt, 10);
-    run_chained_bench(c, &rt, 100);
-    run_chained_bench(c, &rt, 1000);
+    run_chained_bench(c, &rt, 10, 1);
+    run_chained_bench(c, &rt, 100, 1);
+    run_chained_bench(c, &rt, 1000, 1);
+
+    run_chained_bench(c, &rt, 10, ncpu);
+    run_chained_bench(c, &rt, 100, ncpu);
+    run_chained_bench(c, &rt, 1000, ncpu);
 }
 
 criterion_group!(benches, threadpool_simple_benchmark);
