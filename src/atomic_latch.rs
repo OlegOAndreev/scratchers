@@ -19,7 +19,9 @@ impl AtomicLatch {
     }
 
     pub fn done(&self) {
-        let v = self.count.fetch_sub(1, Ordering::Relaxed);
+        // We need to use Acquire-Release here because all producers running done() must synchronize
+        // with consumers running wait().
+        let v = self.count.fetch_sub(1, Ordering::Release);
         if v == 0 {
             panic!("done called more than count times")
         } else if v == 1 {
@@ -33,7 +35,7 @@ impl AtomicLatch {
 
     pub fn wait(&self) {
         let mut guard = self.mutex.lock();
-        if self.count.load(Ordering::Relaxed) == 0 {
+        if self.count.load(Ordering::Acquire) == 0 {
             return;
         }
         self.condvar.wait(&mut guard);
