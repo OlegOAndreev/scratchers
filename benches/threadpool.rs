@@ -1,12 +1,9 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use criterion::{black_box, Criterion, criterion_group, criterion_main};
+use futures::future::{BoxFuture, FutureExt};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::task::JoinHandle;
-use futures::future::{BoxFuture, FutureExt};
-
-use scratchers::atomic_latch::AtomicLatch;
 
 fn simple_job(job_size: i64, start: usize) -> f64 {
     let mut ret = 0.0;
@@ -82,33 +79,6 @@ fn tokio_simple(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, re
     assert_eq!(rt.block_on(sum_join_handles(handles)), result);
 }
 
-struct TokioLatchParams {
-    job_size: i64,
-    latch: AtomicLatch,
-    ret: AtomicI64,
-}
-
-// See comment for tokio_simple_future.
-async fn tokio_latch_future(params: Arc<TokioLatchParams>, start: usize) {
-    params.ret.fetch_add(simple_job(params.job_size, start) as i64, Ordering::Relaxed);
-    params.latch.done();
-}
-
-// Spawns each job individually via tokio and uses AtomicLatch and AtomicI64 to pass the result from
-// the job back.
-fn tokio_latch(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, result: i64) {
-    let params = Arc::new(TokioLatchParams {
-        job_size,
-        latch: AtomicLatch::new(num_jobs as u64),
-        ret: AtomicI64::new(0),
-    });
-    for i in 0..num_jobs {
-        rt.spawn(tokio_latch_future(params.clone(), i));
-    }
-    params.latch.wait();
-    assert_eq!(params.ret.load(Ordering::Relaxed), result);
-}
-
 fn rayon_chained_job<'a>(s: &rayon::Scope<'a>, job_size: i64, left_jobs: usize, cur: i64, ret: &'a AtomicI64) {
     let v = simple_job(job_size, left_jobs - 1) as i64 + cur;
     if left_jobs == 0 {
@@ -179,7 +149,6 @@ fn run_simple_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i
     group.bench_function("rayon simple", |b| b.iter(|| rayon_simple(black_box(job_size), NUM_JOBS, result)));
     group.bench_function("rayon fifo", |b| b.iter(|| rayon_fifo(black_box(job_size), NUM_JOBS, result)));
     group.bench_function("tokio simple", |b| b.iter(|| tokio_simple(rt, black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("tokio latch", |b| b.iter(|| tokio_latch(rt, black_box(job_size), NUM_JOBS, result)));
     group.finish();
 }
 
@@ -197,19 +166,33 @@ fn run_chained_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: 
     group.finish();
 }
 
+// Benchmarks several threadpools by running simple_job() with varying size.
+// Spawns separate tasks:
+//  * single-thread
+//  * rayon par_iter()
+//  * rayon spawn()
+//  * rayon spawn_fifo()
+//  * tokio spawn + .await
 fn threadpool_simple_benchmark(c: &mut Criterion) {
-    let ncpu = num_cpus::get_physical();
     // rayon::ThreadPoolBuilder::new()
     //     .num_threads(ncpu)
     //     .build_global()
     //     .unwrap();
-
     let rt = tokio::runtime::Runtime::new().unwrap();
     run_simple_bench(c, &rt, 10);
     run_simple_bench(c, &rt, 100);
     run_simple_bench(c, &rt, 1000);
     run_simple_bench(c, &rt, 10000);
+}
 
+// Spawns several (1 or num_cpus) chained tasks (each task spawns after the previous one):
+//  * single-thread
+//  * rayon spawn()
+//  * tokio spawn + .await
+fn threadpool_chained_benchmark(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let ncpu = num_cpus::get_physical();
     run_chained_bench(c, &rt, 10, 1);
     run_chained_bench(c, &rt, 100, 1);
     run_chained_bench(c, &rt, 1000, 1);
@@ -219,5 +202,5 @@ fn threadpool_simple_benchmark(c: &mut Criterion) {
     run_chained_bench(c, &rt, 1000, ncpu);
 }
 
-criterion_group!(benches, threadpool_simple_benchmark);
+criterion_group!(benches, threadpool_simple_benchmark, threadpool_chained_benchmark);
 criterion_main!(benches);

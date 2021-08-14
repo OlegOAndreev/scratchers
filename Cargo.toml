@@ -7,16 +7,25 @@ edition = "2018"
 [profile.bench]
 debug = true
 
+[profile.release]
+debug = true
+
 [[bench]]
 name = "threadpool"
 harness = false
 
 [dependencies]
-futures = "^0.3"
-num_cpus = "^1.13"
-parking_lot = "^0.11"
-rayon = "^1.5"
-tokio = { version = "^1.4", features = ["full"] }
+ambisonic = "0.4"
+futures = "0.3"
+kira = "0.5"
+num_cpus = "1.13"
+oddio = "0.4"
+parking_lot = "0.11"
+rayon = "1.5"
+rg3d-sound = "0.24"
+rodio = "0.14"
+soloud = "0.4"
+tokio = { version = "1.10", features = ["full"] }
 
 [dev-dependencies]
-criterion = { version = "^0.3", features = ["html_reports"] }
+criterion = { version = "0.3", features = ["html_reports"] }
