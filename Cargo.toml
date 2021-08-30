@@ -11,6 +11,10 @@ debug = true
 debug = true
 
 [[bench]]
+name = "audio"
+harness = false
+
+[[bench]]
 name = "threadpool"
 harness = false
 
@@ -18,11 +22,13 @@ harness = false
 ambisonic = "0.4"
 futures = "0.3"
 kira = "0.5"
+hound = "3.4"
 num_cpus = "1.13"
 oddio = "0.4"
 parking_lot = "0.11"
 rayon = "1.5"
-rg3d-sound = "0.24"
+rg3d-sound = { git = "https://github.com/rg3dengine/rg3d", rev = "bd015ad" }
+#rg3d-sound = "0.25"
 rodio = "0.14"
 soloud = "0.4"
 tokio = { version = "1.10", features = ["full"] }

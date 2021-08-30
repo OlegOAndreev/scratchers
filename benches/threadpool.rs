@@ -141,7 +141,7 @@ fn tokio_chained(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, p
 fn run_simple_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i64) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("job_size={}", job_size));
+    let mut group = c.benchmark_group(format!("threadpool/job_size={}", job_size));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
     group.sample_size(10)
         .bench_function("single thread", |b| b.iter(|| single_threaded(black_box(job_size), NUM_JOBS)));
@@ -155,7 +155,7 @@ fn run_simple_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i
 fn run_chained_bench(c: &mut Criterion, rt: &tokio::runtime::Runtime, job_size: i64, parallelism: usize) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("chained parallel={} job_size={}", parallelism, job_size));
+    let mut group = c.benchmark_group(format!("threadpool/chained parallel={} job_size={}", parallelism, job_size));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
     if parallelism == 1 {
         group.sample_size(10)
