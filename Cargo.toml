@@ -19,9 +19,9 @@ name = "threadpool"
 harness = false
 
 [dependencies]
-ambisonic = "^0.4"
+anyhow = "^1.0"
 futures = "^0.3"
-kira = "^0.5"
+kira = { version = "^0.5", features = ["benchmarking"] }
 hound = "^3.4"
 num_cpus = "^1.13"
 oddio = "^0.4"
@@ -30,7 +30,6 @@ rayon = "^1.5"
 rg3d-sound = "^0.25"
 rodio = "^0.14"
 sdl2 = { version = "^0.34", features = ["bundled", "static-link"] }
-soloud = "^0.4"
 tokio = { version = "^1.11", features = ["full"] }
 
 [dev-dependencies]
