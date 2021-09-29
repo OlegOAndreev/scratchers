@@ -139,7 +139,14 @@ fn bench_play_rg3d(mut input: BenchRg3dInput) {
         input.context.state().add_source(spatial_src);
     }
 
-    input.engine.lock().unwrap().render(&mut input.out);
+    const BUF_SIZE: usize = 2048;
+    let mut buf = [(0.0f32, 0.0f32); BUF_SIZE];
+    for i in (0..input.out.len()).step_by(BUF_SIZE) {
+        let end = (i + BUF_SIZE).min(input.out.len());
+        let buf_len = end - i;
+        input.engine.lock().unwrap().render(&mut buf[0..buf_len]);
+        input.out[i..end].copy_from_slice(&buf[0..buf_len]);
+    }
 
     criterion::black_box(&input.out);
     debug_write_to_file("rg3d", rg3d_sound::context::SAMPLE_RATE, &input.out);
@@ -189,12 +196,13 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
         });
     }
 
-    // oddio requires processing the output in small chunks. We used the 100ms buffer size when
-    // creating SpatialScene, use 50ms here.
-    let chunk_size = (input.rate as f32 * 0.05) as usize;
-    for i in (0..input.out.len()).step_by(chunk_size) {
-        let end = (i + chunk_size).min(input.out.len());
-        oddio::run(&input.scene, input.rate as u32, &mut input.out[i..end]);
+    const BUF_SIZE: usize = 2048;
+    let mut buf = [[0.0f32, 0.0f32]; BUF_SIZE];
+    for i in (0..input.out.len()).step_by(BUF_SIZE) {
+        let end = (i + BUF_SIZE).min(input.out.len());
+        let buf_len = end - i;
+        oddio::run(&input.scene, input.rate as u32, &mut buf[0..buf_len]);
+        input.out[i..end].copy_from_slice(&buf[0..buf_len]);
     }
 
     criterion::black_box(&input.out);
@@ -207,7 +215,7 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
 fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
     if let Ok(reader) = hound::WavReader::new(Cursor::new(data)) {
         let spec = reader.spec();
-        match spec.sample_format {
+        return match spec.sample_format {
             SampleFormat::Float => {
                 if spec.bits_per_sample != 32 {
                     bail!("Strange WAV file format: {}bit float", spec.bits_per_sample);
@@ -215,7 +223,7 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
                 let samples: Vec<_> = reader.into_samples::<f32>()
                     .map(|s| s.unwrap())
                     .collect();
-                return Ok((samples, spec.sample_rate));
+                Ok((samples, spec.sample_rate))
             }
             SampleFormat::Int => {
                 let mut buf = vec![0.0f32; reader.len() as usize];
@@ -232,9 +240,9 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
                 } else {
                     bail!("Strange WAV file format: {}bit int", spec.bits_per_sample);
                 }
-                return Ok((buf, spec.sample_rate));
+                Ok((buf, spec.sample_rate))
             }
-        }
+        };
     }
     bail!("Could not parse audio file")
 }

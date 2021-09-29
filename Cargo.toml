@@ -21,7 +21,6 @@ harness = false
 [dependencies]
 anyhow = "^1.0"
 futures = "^0.3"
-kira = { version = "^0.5", features = ["benchmarking"] }
 hound = "^3.4"
 num_cpus = "^1.13"
 oddio = "^0.4"
