@@ -565,6 +565,45 @@ fn bench_resample_samplerate(
     debug_write_to_file(&file_prefix, out_rate, out_frames);
 }
 
+// SDL2 resampler
+
+fn prepare_resample_sdl2(in_rate: u32, out_rate: u32) -> sdl2::audio::AudioCVT {
+    sdl2::audio::AudioCVT::new(
+        sdl2::audio::AudioFormat::F32LSB,
+        2,
+        in_rate as i32,
+        sdl2::audio::AudioFormat::F32LSB,
+        2,
+        out_rate as i32,
+    ).unwrap()
+}
+
+fn bench_resample_sdl2(
+    resampler: sdl2::audio::AudioCVT,
+    in_rate: u32,
+    in_frames: &[(f32, f32)],
+    out_rate: u32,
+    out_frames: &mut [(f32, f32)],
+) {
+    let in_chunk_size = (BUF_SIZE as u64 * in_rate as u64 / out_rate as u64) as usize + 1;
+    let out_len = out_frames.len();
+    let mut out_pos = 0;
+    for i in (0..).step_by(in_chunk_size) {
+        let in_chunk = stereo_to_u8(&in_frames[i..i + in_chunk_size]);
+        let out_chunk = resampler.convert(Vec::from(in_chunk));
+        let out_chunk_slice = stereo_from_u8(&out_chunk);
+        let end = (out_pos + out_chunk_slice.len()).min(out_len);
+        out_frames[out_pos..end].copy_from_slice(&out_chunk_slice[0..end - out_pos]);
+        out_pos = end;
+        if out_pos >= out_len {
+            break;
+        }
+    }
+
+    criterion::black_box(&out_frames);
+    debug_write_to_file("sdl2-cvt", out_rate, out_frames);
+}
+
 // Benchmarks audio resamplers.
 pub fn audio_resampler_benchmark(c: &mut Criterion) {
     if std::env::var("DEBUG_WRITE_TO_FILE").is_ok() {
@@ -620,6 +659,10 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
             || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
             |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
             criterion::BatchSize::SmallInput));
+        group.bench_function("sdl2", |b| b.iter_batched(
+            || prepare_resample_sdl2(in_rate, out_rate),
+            |input| bench_resample_sdl2(input, in_rate, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
     }
 
     {
@@ -671,6 +714,10 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
             || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
             |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
             criterion::BatchSize::SmallInput));
+        group.bench_function("sdl2", |b| b.iter_batched(
+            || prepare_resample_sdl2(in_rate, out_rate),
+            |input| bench_resample_sdl2(input, in_rate, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
     }
 }
 
@@ -680,6 +727,14 @@ pub fn flatten_stereo(xs: &[(f32, f32)]) -> &[f32] {
 
 pub fn flatten_stereo_mut(xs: &mut [(f32, f32)]) -> &mut [f32] {
     unsafe { std::slice::from_raw_parts_mut(xs.as_mut_ptr() as _, xs.len() * 2) }
+}
+
+pub fn stereo_to_u8(xs: &[(f32, f32)]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(xs.as_ptr() as _, xs.len() * 8) }
+}
+
+pub fn stereo_from_u8(xs: &[u8]) -> &[(f32, f32)] {
+    unsafe { std::slice::from_raw_parts(xs.as_ptr() as _, xs.len() / 8) }
 }
 
 criterion_group!(mixer_benches, audio_mixer_wav_benchmark);
