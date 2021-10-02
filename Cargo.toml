@@ -28,7 +28,11 @@ parking_lot = "^0.11"
 rayon = "^1.5"
 rg3d-sound = "^0.25"
 rodio = "^0.14"
+rubato = "^0.10"
+samplerate = "^0.2"
 sdl2 = { version = "^0.34", features = ["bundled", "static-link"] }
+# The version published at crates.io looks really old.
+speexdsp-resampler = { git = "https://github.com/rust-av/speexdsp-rs", package = "speexdsp-resampler" }
 tokio = { version = "^1.11", features = ["full"] }
 
 [dev-dependencies]

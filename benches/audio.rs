@@ -1,11 +1,13 @@
 use std::fs;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Result};
 use criterion::{Criterion, criterion_group, criterion_main};
 use hound::SampleFormat;
 use rodio::Source;
+use rubato::Resampler;
 
 const NUM_CHANNELS: i32 = 2;
 // All files in data/ are in 44.1kHz.
@@ -15,10 +17,12 @@ const ALT_RATE: i32 = 48000;
 // Mix for two seconds.
 const MIX_INTERVAL: i32 = 2;
 
+// Buffer size for various resamplers etc.
+const BUF_SIZE: usize = 2048;
+
 // Enable to write the output results to debug.wav (you generally want to run specific benches
 // with this parameter set to true).
-const DEBUG_WRITE_TO_FILE: bool = false;
-// const DEBUG_WRITE_TO_FILE: bool = true;
+static DEBUG_WRITE_TO_FILE: AtomicBool = AtomicBool::new(false);
 
 // rodio.
 
@@ -96,15 +100,17 @@ fn bench_play_rodio(mut input: BenchRodioInput) {
 
 // rg3d-sound.
 
-struct BenchRg3dInput {
+struct BenchRg3dInput<R: rubato::Resampler<f32>> {
+    rate: i32,
     engine: Arc<Mutex<rg3d_sound::engine::SoundEngine>>,
     context: rg3d_sound::context::SoundContext,
     buffers: Vec<rg3d_sound::buffer::SoundBufferResource>,
     num_srcs: usize,
+    out_resampler: R,
     out: Vec<(f32, f32)>,
 }
 
-fn prepare_rg3d_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchRg3dInput {
+fn prepare_rg3d_input_fft(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchRg3dInput<rubato::FftFixedOut<f32>> {
     let engine = rg3d_sound::engine::SoundEngine::without_device();
     let context = rg3d_sound::context::SoundContext::new();
     engine.lock().unwrap().add_context(context.clone());
@@ -117,16 +123,24 @@ fn prepare_rg3d_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> Bench
         .collect();
 
     let out = vec![(0.0f32, 0.0f32); (MIX_INTERVAL * rate) as usize];
+    let out_resampler = rubato::FftFixedOut::<f32>::new(
+        rg3d_sound::context::SAMPLE_RATE as usize,
+        rate as usize,
+        BUF_SIZE,
+        1,
+        2);
     BenchRg3dInput {
+        rate,
         engine,
         context,
         buffers,
         num_srcs,
+        out_resampler,
         out,
     }
 }
 
-fn bench_play_rg3d(mut input: BenchRg3dInput) {
+fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
     for i in 0..input.num_srcs {
         let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
@@ -139,17 +153,43 @@ fn bench_play_rg3d(mut input: BenchRg3dInput) {
         input.context.state().add_source(spatial_src);
     }
 
-    const BUF_SIZE: usize = 2048;
-    let mut buf = [(0.0f32, 0.0f32); BUF_SIZE];
+    let mut buf = [(0.0f32, 0.0f32); BUF_SIZE * 2];
+    let mut left_buf = [0.0f32; BUF_SIZE * 2];
+    let mut right_buf = [0.0f32; BUF_SIZE * 2];
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
-        let end = (i + BUF_SIZE).min(input.out.len());
-        let buf_len = end - i;
-        input.engine.lock().unwrap().render(&mut buf[0..buf_len]);
-        input.out[i..end].copy_from_slice(&buf[0..buf_len]);
+        if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
+            let end = (i + BUF_SIZE).min(input.out.len());
+            let in_samples = input.out_resampler.nbr_frames_needed();
+            input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
+            split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
+            let resampled = input.out_resampler
+                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]])
+                .unwrap();
+            interleave_stereo(&resampled[0], &resampled[1], &mut input.out[i..end]);
+        } else {
+            let end = (i + BUF_SIZE).min(input.out.len());
+            input.engine.lock().unwrap().render(&mut buf[0..BUF_SIZE]);
+            input.out[i..end].copy_from_slice(&buf[0..end - i]);
+        }
     }
 
     criterion::black_box(&input.out);
-    debug_write_to_file("rg3d", rg3d_sound::context::SAMPLE_RATE, &input.out);
+    let prefix = format!("rg3d-fft");
+    debug_write_to_file(&prefix, input.rate as u32, &input.out);
+}
+
+fn split_stereo(stereo: &[(f32, f32)], left: &mut [f32], right: &mut [f32]) {
+    for i in 0..stereo.len() {
+        let (l, r) = stereo[i];
+        left[i] = l;
+        right[i] = r;
+    }
+}
+
+fn interleave_stereo(left: &[f32], right: &[f32], stereo: &mut [(f32, f32)]) {
+    for i in 0..stereo.len() {
+        stereo[i] = (left[i], right[i]);
+    }
 }
 
 // Oddio.
@@ -196,7 +236,6 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
         });
     }
 
-    const BUF_SIZE: usize = 2048;
     let mut buf = [[0.0f32, 0.0f32]; BUF_SIZE];
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
         let end = (i + BUF_SIZE).min(input.out.len());
@@ -251,7 +290,7 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
 // Debug utilities.
 
 fn debug_write_to_file(prefix: &str, rate: u32, buf: &[(f32, f32)]) {
-    if !DEBUG_WRITE_TO_FILE {
+    if !DEBUG_WRITE_TO_FILE.load(Ordering::SeqCst) {
         return;
     }
 
@@ -273,7 +312,7 @@ fn debug_write_to_file(prefix: &str, rate: u32, buf: &[(f32, f32)]) {
 }
 
 fn debug_write_to_file_arr(prefix: &str, rate: u32, buf: &[[f32; 2]]) {
-    if !DEBUG_WRITE_TO_FILE {
+    if !DEBUG_WRITE_TO_FILE.load(Ordering::SeqCst) {
         return;
     }
 
@@ -294,8 +333,12 @@ fn debug_write_to_file_arr(prefix: &str, rate: u32, buf: &[[f32; 2]]) {
     wav_writer.finalize().unwrap();
 }
 
-// Benchmarks audio library mixers.
+// Benchmarks audio mixers.
 pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
+    if std::env::var("DEBUG_WRITE_TO_FILE").is_ok() {
+        DEBUG_WRITE_TO_FILE.store(true, Ordering::SeqCst);
+    }
+
     let beep_data: Vec<u8> = fs::read("benches/data/beep.wav").unwrap();
     let beep2_data: Vec<u8> = fs::read("benches/data/beep2.wav").unwrap();
     let beep48k_data: Vec<u8> = fs::read("benches/data/beep48k.wav").unwrap();
@@ -307,8 +350,8 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             |input| bench_play_rodio(input),
             criterion::BatchSize::SmallInput));
 
-        group.bench_function("rg3d", |b| b.iter_batched(
-            || prepare_rg3d_input(SRC_RATE, vec![], 0),
+        group.bench_function("rg3d-fft", |b| b.iter_batched(
+            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0),
             |input| bench_play_rg3d(input),
             criterion::BatchSize::SmallInput));
 
@@ -327,8 +370,8 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 |input| bench_play_rodio(input),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d", |b| b.iter_batched(
-                || prepare_rg3d_input(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs),
+            group.bench_function("rg3d-fft", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs),
                 |input| bench_play_rg3d(input),
                 criterion::BatchSize::SmallInput));
 
@@ -345,8 +388,8 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput));
 
             // NOTE: The quality here is absolutely horrible.
-            group.bench_function("rg3d", |b| b.iter_batched(
-                || prepare_rg3d_input(SRC_RATE, vec![&beep48k_data], num_srcs),
+            group.bench_function("rg3d-fft", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs),
                 |input| bench_play_rg3d(input),
                 criterion::BatchSize::SmallInput));
 
@@ -362,11 +405,10 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 |input| bench_play_rodio(input),
                 criterion::BatchSize::SmallInput));
 
-            // TODO: Add resampler to bench_play_rg3d.
-            // group.bench_function("rg3d", |b| b.iter_batched(
-            //     || prepare_rg3d_input(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
-            //     |input| bench_play_rg3d(input),
-            //     criterion::BatchSize::SmallInput));
+            group.bench_function("rg3d-fft", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
+                |input| bench_play_rg3d(input),
+                criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
                 || prepare_oddio_input(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
@@ -376,5 +418,270 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, audio_mixer_wav_benchmark);
-criterion_main!(benches);
+// Rubato FFT
+
+fn prepare_rubato_fft(in_rate: u32, out_rate: u32) -> rubato::FftFixedOut<f32> {
+    rubato::FftFixedOut::<f32>::new(
+        in_rate as usize,
+        out_rate as usize,
+        BUF_SIZE,
+        1,
+        2)
+}
+
+fn bench_resample_rubato_fft(
+    mut resampler: rubato::FftFixedOut<f32>,
+    in_frames: &[(f32, f32)],
+    out_rate: u32,
+    out_frames: &mut [(f32, f32)],
+) {
+    let mut in_pos = 0;
+    let mut left = [0.0f32; BUF_SIZE * 2];
+    let mut right = [0.0f32; BUF_SIZE * 2];
+    for i in (0..out_frames.len()).step_by(BUF_SIZE) {
+        let end = (i + BUF_SIZE).min(out_frames.len());
+        let in_samples = resampler.nbr_frames_needed();
+        split_stereo(&in_frames[in_pos..in_pos + in_samples], &mut left[0..in_samples], &mut right[0..in_samples]);
+        in_pos += in_samples;
+        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
+        interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
+    }
+
+    criterion::black_box(&out_frames);
+    debug_write_to_file("rubato-fft", out_rate, out_frames);
+}
+
+
+// Rubato sinc
+
+fn prepare_rubato_sinc(in_rate: u32, out_rate: u32) -> rubato::SincFixedOut<f32> {
+    let resample_ratio = out_rate as f64 / in_rate as f64;
+    rubato::SincFixedOut::<f32>::new(
+        resample_ratio,
+        // Copy-pasted from rubato/examples
+        rubato::InterpolationParameters {
+            sinc_len: 128,
+            f_cutoff: 0.925914648491266,
+            oversampling_factor: 320,
+            interpolation: rubato::InterpolationType::Linear,
+            window: rubato::WindowFunction::Blackman2,
+        },
+        BUF_SIZE,
+        2)
+}
+
+fn bench_resample_rubato_sinc(
+    mut resampler: rubato::SincFixedOut<f32>,
+    in_frames: &[(f32, f32)],
+    out_rate: u32,
+    out_frames: &mut [(f32, f32)],
+) {
+    let mut in_pos = 0;
+    let mut left = [0.0f32; BUF_SIZE * 2];
+    let mut right = [0.0f32; BUF_SIZE * 2];
+    for i in (0..out_frames.len()).step_by(BUF_SIZE) {
+        let end = (i + BUF_SIZE).min(out_frames.len());
+        let in_samples = resampler.nbr_frames_needed();
+        split_stereo(&in_frames[in_pos..in_pos + in_samples], &mut left[0..in_samples], &mut right[0..in_samples]);
+        in_pos += in_samples;
+        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
+        interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
+    }
+
+    criterion::black_box(&out_frames);
+    debug_write_to_file("rubato-sinc", out_rate, out_frames);
+}
+
+// Speexdsp-resampler
+
+fn prepare_resample_speexdsp(in_rate: u32, out_rate: u32, quality: usize) -> speexdsp_resampler::State {
+    speexdsp_resampler::State::new(
+        2,
+        in_rate as usize,
+        out_rate as usize,
+        quality,
+    ).unwrap()
+}
+
+fn bench_resample_speexdsp(
+    mut resampler: speexdsp_resampler::State,
+    in_frames: &[(f32, f32)],
+    out_rate: u32,
+    out_frames: &mut [(f32, f32)],
+) {
+    let in_flat = flatten_stereo(in_frames);
+    let mut in_pos = 0;
+    let out_len = out_frames.len() * 2;
+    let out_flat = flatten_stereo_mut(out_frames);
+    for i in (0..out_len).step_by(BUF_SIZE * 2) {
+        let end = (i + BUF_SIZE * 2).min(out_len);
+        let (in_processed, out_processed) = resampler
+            .process_float(0, &in_flat[in_pos..], &mut out_flat[i..end])
+            .unwrap();
+        assert_eq!(out_processed, end - i);
+        in_pos += in_processed;
+    }
+
+    criterion::black_box(&out_frames);
+    let file_prefix = format!("speexdsp-{}", resampler.get_quality());
+    debug_write_to_file(&file_prefix, out_rate, out_frames);
+}
+
+// Libsamplerate
+
+fn prepare_resample_samplerate(in_rate: u32, out_rate: u32, quality: samplerate::ConverterType) -> samplerate::Samplerate {
+    samplerate::Samplerate::new(
+        quality,
+        in_rate,
+        out_rate,
+        2,
+    ).unwrap()
+}
+
+fn bench_resample_samplerate(
+    resampler: samplerate::Samplerate,
+    in_frames: &[(f32, f32)],
+    out_rate: u32,
+    out_frames: &mut [(f32, f32)],
+    quality: samplerate::ConverterType,
+) {
+    let in_flat = flatten_stereo(in_frames);
+    let in_chunk_size = (BUF_SIZE as u64 * resampler.from_rate() as u64 / resampler.to_rate() as u64) as usize * 2 + 1;
+    let out_len = out_frames.len() * 2;
+    let out_flat = flatten_stereo_mut(out_frames);
+    let mut out_pos = 0;
+    for i in (0..).step_by(in_chunk_size) {
+        let out_chunk = resampler.process(&in_flat[i..i + in_chunk_size]).unwrap();
+        let end = (out_pos + out_chunk.len()).min(out_len);
+        out_flat[out_pos..end].copy_from_slice(&out_chunk[0..end - out_pos]);
+        out_pos = end;
+        if out_pos >= out_len {
+            break;
+        }
+    }
+
+    criterion::black_box(&out_frames);
+    let file_prefix = format!("samplerate-{:?}", quality);
+    debug_write_to_file(&file_prefix, out_rate, out_frames);
+}
+
+// Benchmarks audio resamplers.
+pub fn audio_resampler_benchmark(c: &mut Criterion) {
+    if std::env::var("DEBUG_WRITE_TO_FILE").is_ok() {
+        DEBUG_WRITE_TO_FILE.store(true, Ordering::SeqCst);
+    }
+
+    {
+        let beep_data: Vec<u8> = fs::read("benches/data/beep.wav").unwrap();
+        // Let's test every resampler on stereo data as it is probably the .
+        let (beep_frames_mono, in_rate) = read_audio(&beep_data).unwrap();
+        let beep_frames: Vec<_> = beep_frames_mono.into_iter()
+            .map(|v| (v, v))
+            .collect();
+        assert_eq!(in_rate, 44100);
+
+        let out_rate = 48000u32;
+        let mut out = vec![(0.0f32, 0.0f32); out_rate as usize * MIX_INTERVAL as usize];
+
+        let mut group = c.benchmark_group("resample/in 44.1k/out 48k");
+        group.bench_function("rubato-fft", |b| b.iter_batched(
+            || prepare_rubato_fft(in_rate, out_rate),
+            |input| bench_resample_rubato_fft(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("rubato-sinc", |b| b.iter_batched(
+            || prepare_rubato_sinc(in_rate, out_rate),
+            |input| bench_resample_rubato_sinc(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-0", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 0),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-5", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 5),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-10", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 10),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-linear", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::Linear),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::Linear),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-fastest", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincFastest),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincFastest),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-medium", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincMediumQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincMediumQuality),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-best", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
+            criterion::BatchSize::SmallInput));
+    }
+
+    {
+        let beep_data: Vec<u8> = fs::read("benches/data/beep48k.wav").unwrap();
+        // Let's test every resampler on stereo data as it is probably the .
+        let (beep_frames_mono, in_rate) = read_audio(&beep_data).unwrap();
+        let beep_frames: Vec<_> = beep_frames_mono.into_iter()
+            .map(|v| (v, v))
+            .collect();
+        assert_eq!(in_rate, 48000);
+
+        let out_rate = 44100u32;
+        let mut out = vec![(0.0f32, 0.0f32); out_rate as usize * MIX_INTERVAL as usize];
+
+        let mut group = c.benchmark_group("resample/in 48k/out 44.1k");
+        group.bench_function("rubato-fft", |b| b.iter_batched(
+            || prepare_rubato_fft(in_rate, out_rate),
+            |input| bench_resample_rubato_fft(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("rubato-sinc", |b| b.iter_batched(
+            || prepare_rubato_sinc(in_rate, out_rate),
+            |input| bench_resample_rubato_sinc(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-0", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 0),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-5", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 5),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("speexdsp-10", |b| b.iter_batched(
+            || prepare_resample_speexdsp(in_rate, out_rate, 10),
+            |input| bench_resample_speexdsp(input, &beep_frames, out_rate, &mut out),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-linear", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::Linear),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::Linear),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-fastest", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincFastest),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincFastest),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-medium", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincMediumQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincMediumQuality),
+            criterion::BatchSize::SmallInput));
+        group.bench_function("samplerate-sinc-best", |b| b.iter_batched(
+            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
+            criterion::BatchSize::SmallInput));
+    }
+}
+
+pub fn flatten_stereo(xs: &[(f32, f32)]) -> &[f32] {
+    unsafe { std::slice::from_raw_parts(xs.as_ptr() as _, xs.len() * 2) }
+}
+
+pub fn flatten_stereo_mut(xs: &mut [(f32, f32)]) -> &mut [f32] {
+    unsafe { std::slice::from_raw_parts_mut(xs.as_mut_ptr() as _, xs.len() * 2) }
+}
+
+criterion_group!(mixer_benches, audio_mixer_wav_benchmark);
+criterion_group!(resampler_benches, audio_resampler_benchmark);
+criterion_main!(mixer_benches, resampler_benches);

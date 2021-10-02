@@ -671,7 +671,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98b081817fdd46ee439f18975b3764cafd56642e251d55ebf6faf9120be95da"
 dependencies = [
  "byteorder",
- "rubato",
+ "rubato 0.8.1",
  "rustfft",
 ]
 
@@ -783,6 +783,15 @@ checksum = "6f84d96438c15fcd6c3f244c8fce01d1e2b9c6b5623e9c711dc9286d8fc92d6a"
 dependencies = [
  "cfg-if 1.0.0",
  "winapi",
+]
+
+[[package]]
+name = "libsamplerate-sys"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "403163258e75b5780cd6245c04cddd7f3166c5f8dd2bf5462e596c9ca4eb9653"
+dependencies = [
+ "cmake",
 ]
 
 [[package]]
@@ -1508,6 +1517,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rubato"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d29cf25e25288b595458df0e00c3065db08c31afe4b4e5a74cbfc5a9b8e763cd"
+dependencies = [
+ "log",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "realfft",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1561,6 +1583,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "samplerate"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e032b2b24715c4f982f483ea3abdb3c9ba444d9f63e87b2843d6f998f5ba2698"
+dependencies = [
+ "libsamplerate-sys",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1580,7 +1611,10 @@ dependencies = [
  "rayon",
  "rg3d-sound",
  "rodio",
+ "rubato 0.10.0",
+ "samplerate",
  "sdl2",
+ "speexdsp-resampler",
  "tokio",
 ]
 
@@ -1705,6 +1739,14 @@ name = "smallvec"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
+
+[[package]]
+name = "speexdsp-resampler"
+version = "0.1.0"
+source = "git+https://github.com/rust-av/speexdsp-rs#f52cc124bd6dfa712b194c79f3c851f925cfeef4"
+dependencies = [
+ "cfg-if 1.0.0",
+]
 
 [[package]]
 name = "stdweb"
