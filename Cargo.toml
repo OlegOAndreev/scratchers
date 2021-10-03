@@ -20,7 +20,7 @@ harness = false
 
 [dependencies]
 anyhow = "^1.0"
-futures = "^0.3"
+futures = { version = "^0.3", features = ["thread-pool"] }
 hound = "^3.4"
 num_cpus = "^1.13"
 oddio = "^0.4"
