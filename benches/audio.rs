@@ -110,7 +110,12 @@ struct BenchRg3dInput<R: rubato::Resampler<f32>> {
     out: Vec<(f32, f32)>,
 }
 
-fn prepare_rg3d_input_fft(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchRg3dInput<rubato::FftFixedOut<f32>> {
+fn prepare_rg3d_input_fft(
+    rate: i32,
+    src_data: Vec<&[u8]>,
+    num_srcs: usize,
+    with_hrtf: bool,
+) -> BenchRg3dInput<rubato::FftFixedOut<f32>> {
     let engine = rg3d_sound::engine::SoundEngine::without_device();
     let context = rg3d_sound::context::SoundContext::new();
     engine.lock().unwrap().add_context(context.clone());
@@ -121,6 +126,15 @@ fn prepare_rg3d_input_fft(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> B
                 .unwrap()
         })
         .collect();
+    if with_hrtf {
+        let hrir_sphere = rg3d_sound::hrtf::HrirSphere::from_file(
+            "benches/data/IRC_1002_C.bin",
+            rg3d_sound::context::SAMPLE_RATE,
+        ).unwrap();
+        context.state().set_renderer(rg3d_sound::renderer::Renderer::HrtfRenderer(
+            rg3d_sound::renderer::hrtf::HrtfRenderer::new(hrir_sphere)
+        ));
+    }
 
     let out = vec![(0.0f32, 0.0f32); (MIX_INTERVAL * rate) as usize];
     let out_resampler = rubato::FftFixedOut::<f32>::new(
@@ -140,7 +154,56 @@ fn prepare_rg3d_input_fft(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> B
     }
 }
 
-fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
+fn bench_play_rg3d<R: rubato::Resampler<f32>>(input: BenchRg3dInput<R>, with_hrtf: bool) {
+    if with_hrtf {
+        bench_play_rg3d_inner(input, rg3d_sound::engine::SoundEngine::render_buffer_len(), "rg3d-fft-hrtf");
+    } else {
+        bench_play_rg3d_inner(input, BUF_SIZE, "rg3d-fft");
+    }
+}
+
+fn bench_play_rg3d_inner<R: rubato::Resampler<f32>>(
+    mut input: BenchRg3dInput<R>,
+    buf_size: usize,
+    prefix: &str,
+) {
+    for i in 0..input.num_srcs {
+        let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
+            .with_buffer(input.buffers[i % input.buffers.len()].clone())
+            .with_status(rg3d_sound::source::Status::Playing)
+            .build()
+            .unwrap();
+        let spatial_src = rg3d_sound::source::spatial::SpatialSourceBuilder::new(src)
+            .with_position([0.1, 0.0, 0.0].into())
+            .build_source();
+        input.context.state().add_source(spatial_src);
+    }
+
+    let mut buf = vec![(0.0f32, 0.0f32); buf_size * 2];
+    let mut left_buf = vec![0.0f32; buf_size * 2];
+    let mut right_buf = vec![0.0f32; buf_size * 2];
+    for i in (0..input.out.len()).step_by(buf_size) {
+        if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
+            let end = (i + buf_size).min(input.out.len());
+            let in_samples = input.out_resampler.nbr_frames_needed();
+            input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
+            split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
+            let resampled = input.out_resampler
+                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]])
+                .unwrap();
+            interleave_stereo(&resampled[0], &resampled[1], &mut input.out[i..end]);
+        } else {
+            let end = (i + buf_size).min(input.out.len());
+            input.engine.lock().unwrap().render(&mut buf[0..buf_size]);
+            input.out[i..end].copy_from_slice(&buf[0..end - i]);
+        }
+    }
+
+    criterion::black_box(&input.out);
+    debug_write_to_file(prefix, input.rate as u32, &input.out);
+}
+
+fn bench_play_rg3d_moving<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
     for i in 0..input.num_srcs {
         let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
@@ -153,10 +216,15 @@ fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
         input.context.state().add_source(spatial_src);
     }
 
-    let mut buf = [(0.0f32, 0.0f32); BUF_SIZE * 2];
-    let mut left_buf = [0.0f32; BUF_SIZE * 2];
-    let mut right_buf = [0.0f32; BUF_SIZE * 2];
+    let mut buf = vec![(0.0f32, 0.0f32); BUF_SIZE * 2];
+    let mut left_buf = vec![0.0f32; BUF_SIZE * 2];
+    let mut right_buf = vec![0.0f32; BUF_SIZE * 2];
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
+        // Move listener a bit.
+        let listener_x = (i as f32 * 0.1).sin();
+        let listener_y = (i as f32 * 0.1).cos();
+        input.context.state().listener_mut().set_position([listener_x, listener_y, 0.0].into());
+
         if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
             let end = (i + BUF_SIZE).min(input.out.len());
             let in_samples = input.out_resampler.nbr_frames_needed();
@@ -174,8 +242,7 @@ fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
     }
 
     criterion::black_box(&input.out);
-    let prefix = format!("rg3d-fft");
-    debug_write_to_file(&prefix, input.rate as u32, &input.out);
+    debug_write_to_file("rg3d-fft-moving", input.rate as u32, &input.out);
 }
 
 fn split_stereo(stereo: &[(f32, f32)], left: &mut [f32], right: &mut [f32]) {
@@ -351,8 +418,13 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             criterion::BatchSize::SmallInput));
 
         group.bench_function("rg3d-fft", |b| b.iter_batched(
-            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0),
-            |input| bench_play_rg3d(input),
+            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0, false),
+            |input| bench_play_rg3d(input, false),
+            criterion::BatchSize::SmallInput));
+
+        group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
+            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0, false),
+            |input| bench_play_rg3d_moving(input),
             criterion::BatchSize::SmallInput));
 
         group.bench_function("oddio", |b| b.iter_batched(
@@ -371,8 +443,18 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs),
-                |input| bench_play_rg3d(input),
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_rg3d(input, false),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_rg3d(input, true),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_rg3d_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
@@ -389,8 +471,18 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
 
             // NOTE: The quality here is absolutely horrible.
             group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs),
-                |input| bench_play_rg3d(input),
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
+                |input| bench_play_rg3d(input, false),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_rg3d(input, true),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
+                |input| bench_play_rg3d_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
@@ -406,8 +498,18 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
-                |input| bench_play_rg3d(input),
+                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_rg3d(input, false),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_rg3d(input, true),
+                criterion::BatchSize::SmallInput));
+
+            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
+                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_rg3d_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
