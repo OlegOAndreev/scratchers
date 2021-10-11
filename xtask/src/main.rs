@@ -34,7 +34,6 @@ fn try_main() -> Result<()> {
                 .required(false))
             .subcommand(SubCommand::with_name("build")
                 .about("Sets up cross-compiling environment (including cc & cmake) and runs cargo build.")
-                .arg_from_usage("--release 'Run cargo build --release'")
                 .arg(Arg::with_name("args")
                     .help("Arguments to pass to cargo build")
                     .multiple(true)
@@ -183,8 +182,6 @@ const EXE_EXT: &str = ".exe";
 const EXE_EXT: &str = "";
 
 fn run_android_build(matches: &ArgMatches, ndk: &AndroidNdk) -> Result<()> {
-    let _cargo = env::var("CARGO")
-        .context("This binary must be run via cargo xtask")?;
     let build_args = matches.values_of_lossy("args").unwrap();
     let verbose = build_args.iter().any(|v| v == "-v");
 
@@ -198,10 +195,12 @@ fn run_android_build(matches: &ArgMatches, ndk: &AndroidNdk) -> Result<()> {
     let target_cc = ndk_toolchain_dir.join(format!("{}{}-clang{}", TARGET_TRIPLE, ndk.api_level, CLANG_EXT));
     let target_cxx = ndk_toolchain_dir.join(format!("{}{}-clang++{}", TARGET_TRIPLE, ndk.api_level, CLANG_EXT));
     let target_ar = ndk_toolchain_dir.join(format!("llvm-ar{}", EXE_EXT));
-    // Required by rustc. The library is required at least for some NDKs, see:
+    // The c++abi library is required at least for some NDKs, see:
     // * https://github.com/Kitware/CMake/commit/4dca07882944ec5c1d87edf1b7df9f3c7294e0d0
     // * https://android.googlesource.com/platform/ndk/+/43b2de34ef9e3a70573fe51a9e069f985a4be5b9/build/cmake/android.toolchain.cmake#368
-    let rustflags = format!("-C linker={} -C link-arg=-lc++abi", target_cxx.display());
+    // We use force-frame-pointers because the performance impact is absolutely minimal while the
+    // profiling becomes a lot easier.
+    let rustflags = format!("-C linker={} -C link-arg=-lc++abi -C force-frame-pointers=yes", target_cxx.display());
     // Set CMAKE_TOOLCHAIN_FILE env var for cmake crate.
     let original_cmake_toolchain_file = ndk.ndk_root
         .join("build")
