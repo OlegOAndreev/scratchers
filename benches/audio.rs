@@ -164,9 +164,10 @@ struct Rg3dHrtfReader {
 
 impl Rg3dHrtfReader {
     fn new() -> Self {
+        let chunk_size = rg3d_sound::engine::SoundEngine::render_buffer_len();
         Self {
-            chunk: vec![(0.0, 0.0); rg3d_sound::engine::SoundEngine::render_buffer_len()],
-            pos: rg3d_sound::engine::SoundEngine::render_buffer_len(),
+            chunk: vec![(0.0, 0.0); chunk_size],
+            pos: chunk_size,
         }
     }
 
