@@ -26,16 +26,19 @@ num_cpus = "^1.13"
 oddio = "^0.4"
 parking_lot = "^0.11"
 rayon = "^1.5"
-rg3d-sound = "^0.25"
+# Waiting for 0.26
+rg3d-sound = { git = "https://github.com/rg3dengine/rg3d/" }
 rodio = "^0.14"
 rubato = "^0.10"
 samplerate = "^0.2"
-# Use the new SDL2 version from my repo until https://github.com/Rust-SDL2/rust-sdl2/pull/1150 is merged
-sdl2 = { git = "https://github.com/OlegOAndreev/rust-sdl2", features = ["bundled", "static-link"] }
-#sdl2 = { version = "^0.34", features = ["bundled", "static-link"] }
+sdl2 = { version = "^0.35", features = ["bundled"] }
 # The version published at crates.io looks really old.
 speexdsp-resampler = { git = "https://github.com/rust-av/speexdsp-rs", package = "speexdsp-resampler" }
 tokio = { version = "^1.11", features = ["full"] }
 
 [dev-dependencies]
-criterion = { version = "^0.3", features = ["html_reports"] }
+criterion = "^0.3"
+
+[patch.crates-io]
+# Waiting until new release and version bump in rg3d-sound.
+hrtf = { git = "https://github.com/mrDIMAS/hrtf/" }
