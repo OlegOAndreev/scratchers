@@ -154,19 +154,41 @@ fn prepare_rg3d_input_fft(
     }
 }
 
-fn bench_play_rg3d<R: rubato::Resampler<f32>>(input: BenchRg3dInput<R>, with_hrtf: bool) {
-    if with_hrtf {
-        bench_play_rg3d_inner(input, rg3d_sound::engine::SoundEngine::render_buffer_len(), "rg3d-fft-hrtf");
-    } else {
-        bench_play_rg3d_inner(input, BUF_SIZE, "rg3d-fft");
+// rg3d-sound requires the render() to be called with a specific buffer size
+// (rg3d_sound::engine::SoundEngine::render_buffer_len()) while we need to produce chunks
+// of different size. Rg3dHrtfReader allows rendering into buffers of any size.
+struct Rg3dHrtfReader {
+    chunk: Vec<(f32, f32)>,
+    pos: usize,
+}
+
+impl Rg3dHrtfReader {
+    fn new() -> Self {
+        Self {
+            chunk: vec![(0.0, 0.0); rg3d_sound::engine::SoundEngine::render_buffer_len()],
+            pos: rg3d_sound::engine::SoundEngine::render_buffer_len(),
+        }
+    }
+
+    fn render(&mut self, engine: &mut rg3d_sound::engine::SoundEngine, buf: &mut [(f32, f32)]) {
+        let mut buf_pos = 0;
+        loop {
+            let buf_remaining = buf.len() - buf_pos;
+            let chunk_remaining = self.chunk.len() - self.pos;
+            if buf_remaining <= chunk_remaining {
+                buf[buf_pos..].copy_from_slice(&self.chunk[self.pos..self.pos + buf_remaining]);
+                self.pos += buf_remaining;
+                return;
+            }
+            buf[buf_pos..buf_pos + chunk_remaining].copy_from_slice(&self.chunk[self.pos..]);
+            buf_pos += chunk_remaining;
+            engine.render(&mut self.chunk);
+            self.pos = 0;
+        }
     }
 }
 
-fn bench_play_rg3d_inner<R: rubato::Resampler<f32>>(
-    mut input: BenchRg3dInput<R>,
-    buf_size: usize,
-    prefix: &str,
-) {
+fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>, with_hrtf: bool) {
     for i in 0..input.num_srcs {
         let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
@@ -179,26 +201,41 @@ fn bench_play_rg3d_inner<R: rubato::Resampler<f32>>(
         input.context.state().add_source(spatial_src);
     }
 
-    let mut buf = vec![(0.0f32, 0.0f32); buf_size * 2];
-    let mut left_buf = vec![0.0f32; buf_size * 2];
-    let mut right_buf = vec![0.0f32; buf_size * 2];
-    for i in (0..input.out.len()).step_by(buf_size) {
+    let mut buf = vec![(0.0f32, 0.0f32); BUF_SIZE * 2];
+    let mut left_buf = vec![0.0f32; BUF_SIZE * 2];
+    let mut right_buf = vec![0.0f32; BUF_SIZE * 2];
+    let mut hrtf_reader = Rg3dHrtfReader::new();
+
+    for i in (0..input.out.len()).step_by(BUF_SIZE) {
         if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
-            let end = (i + buf_size).min(input.out.len());
+            let end = (i + BUF_SIZE).min(input.out.len());
             let in_samples = input.out_resampler.nbr_frames_needed();
-            input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
+            if with_hrtf {
+                hrtf_reader.render(&mut input.engine.lock().unwrap(), &mut buf[0..in_samples]);
+            } else {
+                input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
+            }
             split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
             let resampled = input.out_resampler
                 .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]])
                 .unwrap();
             interleave_stereo(&resampled[0], &resampled[1], &mut input.out[i..end]);
         } else {
-            let end = (i + buf_size).min(input.out.len());
-            input.engine.lock().unwrap().render(&mut buf[0..buf_size]);
+            let end = (i + BUF_SIZE).min(input.out.len());
+            if with_hrtf {
+                hrtf_reader.render(&mut input.engine.lock().unwrap(), &mut buf[0..BUF_SIZE]);
+            } else {
+                input.engine.lock().unwrap().render(&mut buf[0..BUF_SIZE]);
+            }
             input.out[i..end].copy_from_slice(&buf[0..end - i]);
         }
     }
 
+    let prefix = if with_hrtf {
+        "rg3d-fft-hrtf"
+    } else {
+        "rg3d-fft"
+    };
     criterion::black_box(&input.out);
     debug_write_to_file(prefix, input.rate as u32, &input.out);
 }
