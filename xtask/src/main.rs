@@ -182,7 +182,7 @@ const EXE_EXT: &str = ".exe";
 const EXE_EXT: &str = "";
 
 fn run_android_build(matches: &ArgMatches, ndk: &AndroidNdk) -> Result<()> {
-    let build_args = matches.values_of_lossy("args").unwrap();
+    let build_args = matches.values_of_lossy("args").unwrap_or(vec![]);
     let verbose = build_args.iter().any(|v| v == "-v");
 
     let ndk_toolchain_dir = ndk.ndk_root
