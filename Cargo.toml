@@ -27,7 +27,7 @@ oddio = "^0.4"
 parking_lot = "^0.11"
 rayon = "^1.5"
 # Waiting for 0.26
-rg3d-sound = { git = "https://github.com/rg3dengine/rg3d/" }
+rg3d-sound = { git = "https://github.com/rg3dengine/rg3d/", package = "rg3d-sound" }
 rodio = "^0.14"
 rubato = "^0.10"
 samplerate = "^0.2"
