@@ -29,10 +29,10 @@ fn try_main() -> Result<()> {
 }
 
 fn run_android(matches: &ArgMatches) -> Result<()> {
-    let (ndk, arches) = android::parse_subcommand(matches)?;
+    let ndk = android::parse_subcommand(matches)?;
 
     if let Some(subcommand_matches) = matches.subcommand_matches("build") {
-        let args = android::parse_build_subcommand(subcommand_matches)?;
+        let (arches, args) = android::parse_build_subcommand(subcommand_matches)?;
         for arch in arches {
             android::run_build(&ndk, arch, &args)?;
         }

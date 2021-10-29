@@ -67,40 +67,29 @@ pub fn android_subcommand(name: &str) -> App {
             .value_name("PATH")
             .help("Path to Android NDK (if not set, search in standard locations)")
             .required(false))
+}
+
+pub fn android_build_subcommand(name: &str) -> App {
+    SubCommand::with_name(name)
+        .about("Sets up cross-compiling environment (including cc & cmake) and runs cargo build.")
         .arg(Arg::with_name(ARCH_ARG)
             .short("-a")
             .long("--arch")
             .value_name(ARCH_ARG)
             .help("Architectures to build for, list of comma-separated values (if not set, aarch64)")
             .required(false))
-}
-
-pub fn android_build_subcommand(name: &str) -> App {
-    SubCommand::with_name(name)
-        .about("Sets up cross-compiling environment (including cc & cmake) and runs cargo build.")
         .arg(Arg::with_name(ARGS_ARG)
             .help("Arguments to pass to cargo build")
             .multiple(true)
             .last(true))
 }
 
-pub fn parse_subcommand(matches: &ArgMatches) -> Result<(AndroidNdk, Vec<Arch>)> {
-    let arches = match matches.values_of_lossy(ARCH_ARG) {
-        None => vec![Arch::AARCH64],
-        Some(value) => {
-            value.iter()
-                .map(|v| v.split(','))
-                .flatten()
-                .map(|s| Arch::from_str(s))
-                .collect::<Result<Vec<_>>>()?
-        }
-    };
+pub fn parse_subcommand(matches: &ArgMatches) -> Result<AndroidNdk> {
     let ndk = find_ndk(matches.value_of(API_LEVEL_ARG), matches.value_of(SDK_ROOT_ARG),
                        matches.value_of(NDK_ROOT_ARG))?;
     eprintln!("Using API level {}, SDK root {:?}, NDK root {:?}", ndk.api_level, ndk.sdk_root,
               ndk.ndk_root);
-    eprintln!("Building for arches {:?}", arches);
-    Ok((ndk, arches))
+    Ok(ndk)
 }
 
 fn find_ndk(
@@ -216,8 +205,20 @@ const EXE_EXT: &str = ".exe";
 #[cfg(not(target_os = "windows"))]
 const EXE_EXT: &str = "";
 
-pub fn parse_build_subcommand(matches: &ArgMatches) -> Result<Vec<String>> {
-    Ok(matches.values_of_lossy(ARGS_ARG).unwrap_or(vec![]))
+pub fn parse_build_subcommand(matches: &ArgMatches) -> Result<(Vec<Arch>, Vec<String>)> {
+    let arches = match matches.values_of_lossy(ARCH_ARG) {
+        None => vec![Arch::AARCH64],
+        Some(value) => {
+            value.iter()
+                .map(|v| v.split(','))
+                .flatten()
+                .map(|s| Arch::from_str(s))
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
+    let args = matches.values_of_lossy(ARGS_ARG).unwrap_or(vec![]);
+    eprintln!("Building for arches {:?}", arches);
+    Ok((arches, args))
 }
 
 pub fn run_build(ndk: &AndroidNdk, arch: Arch, build_args: &[String]) -> Result<()> {
