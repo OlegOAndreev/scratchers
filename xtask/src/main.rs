@@ -34,8 +34,9 @@ fn run_android(matches: &ArgMatches) -> Result<()> {
     if let Some(subcommand_matches) = matches.subcommand_matches("build") {
         let args = android::parse_build_subcommand(subcommand_matches)?;
         for arch in arches {
-            return android::run_build(&ndk, arch, &args);
+            android::run_build(&ndk, arch, &args)?;
         }
+        return Ok(());
     }
     bail!("Unknown subcommand for android")
 }
