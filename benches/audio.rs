@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Result};
 use criterion::{Criterion, criterion_group, criterion_main};
-use hound::SampleFormat;
 use rodio::Source;
 use rubato::Resampler;
 
@@ -360,7 +359,7 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
     if let Ok(reader) = hound::WavReader::new(Cursor::new(data)) {
         let spec = reader.spec();
         return match spec.sample_format {
-            SampleFormat::Float => {
+            hound::SampleFormat::Float => {
                 if spec.bits_per_sample != 32 {
                     bail!("Strange WAV file format: {}bit float", spec.bits_per_sample);
                 }
@@ -369,7 +368,7 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
                     .collect();
                 Ok((samples, spec.sample_rate))
             }
-            SampleFormat::Int => {
+            hound::SampleFormat::Int => {
                 let mut buf = vec![0.0f32; reader.len() as usize];
                 if spec.bits_per_sample == 16 {
                     let samples = reader.into_samples::<i16>().map(|s| s.unwrap());
@@ -581,7 +580,8 @@ fn bench_resample_rubato_fft(
     for i in (0..out_frames.len()).step_by(BUF_SIZE) {
         let end = (i + BUF_SIZE).min(out_frames.len());
         let in_samples = resampler.nbr_frames_needed();
-        split_stereo(&in_frames[in_pos..in_pos + in_samples], &mut left[0..in_samples], &mut right[0..in_samples]);
+        split_stereo(&in_frames[in_pos..in_pos + in_samples],
+                     &mut left[0..in_samples], &mut right[0..in_samples]);
         in_pos += in_samples;
         let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
         interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
@@ -622,7 +622,8 @@ fn bench_resample_rubato_sinc(
     for i in (0..out_frames.len()).step_by(BUF_SIZE) {
         let end = (i + BUF_SIZE).min(out_frames.len());
         let in_samples = resampler.nbr_frames_needed();
-        split_stereo(&in_frames[in_pos..in_pos + in_samples], &mut left[0..in_samples], &mut right[0..in_samples]);
+        split_stereo(&in_frames[in_pos..in_pos + in_samples],
+                     &mut left[0..in_samples], &mut right[0..in_samples]);
         in_pos += in_samples;
         let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
         interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
@@ -634,7 +635,11 @@ fn bench_resample_rubato_sinc(
 
 // Speexdsp-resampler
 
-fn prepare_resample_speexdsp(in_rate: u32, out_rate: u32, quality: usize) -> speexdsp_resampler::State {
+fn prepare_resample_speexdsp(
+    in_rate: u32,
+    out_rate: u32,
+    quality: usize,
+) -> speexdsp_resampler::State {
     speexdsp_resampler::State::new(
         2,
         in_rate as usize,
@@ -669,7 +674,11 @@ fn bench_resample_speexdsp(
 
 // Libsamplerate
 
-fn prepare_resample_samplerate(in_rate: u32, out_rate: u32, quality: samplerate::ConverterType) -> samplerate::Samplerate {
+fn prepare_resample_samplerate(
+    in_rate: u32,
+    out_rate: u32,
+    quality: samplerate::ConverterType,
+) -> samplerate::Samplerate {
     samplerate::Samplerate::new(
         quality,
         in_rate,
@@ -686,7 +695,8 @@ fn bench_resample_samplerate(
     quality: samplerate::ConverterType,
 ) {
     let in_flat = flatten_stereo(in_frames);
-    let in_chunk_size = (BUF_SIZE as u64 * resampler.from_rate() as u64 / resampler.to_rate() as u64) as usize * 2 + 1;
+    let in_chunk_size = (BUF_SIZE as u64 * resampler.from_rate() as u64
+        / resampler.to_rate() as u64) as usize * 2 + 1;
     let out_len = out_frames.len() * 2;
     let out_flat = flatten_stereo_mut(out_frames);
     let mut out_pos = 0;
@@ -785,19 +795,26 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-linear", |b| b.iter_batched(
             || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::Linear),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::Linear),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::Linear),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-fastest", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincFastest),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincFastest),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincFastest),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincFastest),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-medium", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincMediumQuality),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincMediumQuality),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincMediumQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincMediumQuality),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-best", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincBestQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincBestQuality),
             criterion::BatchSize::SmallInput));
         group.bench_function("sdl2", |b| b.iter_batched(
             || prepare_resample_sdl2(in_rate, out_rate),
@@ -840,19 +857,26 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-linear", |b| b.iter_batched(
             || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::Linear),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::Linear),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::Linear),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-fastest", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincFastest),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincFastest),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincFastest),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincFastest),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-medium", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincMediumQuality),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincMediumQuality),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincMediumQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincMediumQuality),
             criterion::BatchSize::SmallInput));
         group.bench_function("samplerate-sinc-best", |b| b.iter_batched(
-            || prepare_resample_samplerate(in_rate, out_rate, samplerate::ConverterType::SincBestQuality),
-            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out, samplerate::ConverterType::SincBestQuality),
+            || prepare_resample_samplerate(in_rate, out_rate,
+                                           samplerate::ConverterType::SincBestQuality),
+            |input| bench_resample_samplerate(input, &beep_frames, out_rate, &mut out,
+                                              samplerate::ConverterType::SincBestQuality),
             criterion::BatchSize::SmallInput));
         group.bench_function("sdl2", |b| b.iter_batched(
             || prepare_resample_sdl2(in_rate, out_rate),

@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use criterion::{black_box, Criterion, criterion_group, criterion_main};
-use futures::future::{BoxFuture, FutureExt, RemoteHandle};
+use futures::future;
+use futures::future::FutureExt;
 use futures::task::SpawnExt;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tokio::task::JoinHandle;
 
 use scratchers::atomic_latch::AtomicLatch;
 
@@ -73,7 +73,7 @@ async fn accum_future(job_size: i64, start: usize, accum: Arc<AtomicI64>, latch:
     latch.done();
 }
 
-async fn sum_join_handles(handles: Vec<JoinHandle<i64>>) -> i64 {
+async fn sum_join_handles(handles: Vec<tokio::task::JoinHandle<i64>>) -> i64 {
     let mut ret = 0;
     for handle in handles {
         ret += handle.await.unwrap()
@@ -81,7 +81,7 @@ async fn sum_join_handles(handles: Vec<JoinHandle<i64>>) -> i64 {
     ret
 }
 
-async fn sum_remote_handles(handles: Vec<RemoteHandle<i64>>) -> i64 {
+async fn sum_remote_handles(handles: Vec<future::RemoteHandle<i64>>) -> i64 {
     let mut ret = 0;
     for handle in handles {
         ret += handle.await;
@@ -116,7 +116,13 @@ fn futures_accum(tp: &futures::executor::ThreadPool, job_size: i64, num_jobs: us
     assert_eq!(accum.load(Ordering::Relaxed), result);
 }
 
-fn rayon_chained_job<'a>(s: &rayon::Scope<'a>, job_size: i64, left_jobs: usize, cur: i64, ret: &'a AtomicI64) {
+fn rayon_chained_job<'a>(
+    s: &rayon::Scope<'a>,
+    job_size: i64,
+    left_jobs: usize,
+    cur: i64,
+    ret: &'a AtomicI64,
+) {
     let v = simple_job(job_size, left_jobs - 1) as i64 + cur;
     if left_jobs == 0 {
         ret.store(v as i64, Ordering::Relaxed);
@@ -143,7 +149,7 @@ fn rayon_chained(job_size: i64, num_jobs: usize, parallelism: usize, result: i64
 }
 
 // Spawns the next job after the previous one completes via tokio.
-fn chained_future(job_size: i64, left_jobs: usize) -> BoxFuture<'static, i64> {
+fn chained_future(job_size: i64, left_jobs: usize) -> future::BoxFuture<'static, i64> {
     async move {
         let v = simple_job(job_size, left_jobs - 1) as i64;
         if left_jobs == 1 {
@@ -154,7 +160,7 @@ fn chained_future(job_size: i64, left_jobs: usize) -> BoxFuture<'static, i64> {
     }.boxed()
 }
 
-async fn get_join_handles(handles: Vec<JoinHandle<i64>>) -> Vec<i64> {
+async fn get_join_handles(handles: Vec<tokio::task::JoinHandle<i64>>) -> Vec<i64> {
     let mut ret = Vec::with_capacity(handles.len());
     for handle in handles {
         ret.push(handle.await.unwrap());
@@ -162,7 +168,7 @@ async fn get_join_handles(handles: Vec<JoinHandle<i64>>) -> Vec<i64> {
     ret
 }
 
-async fn get_remote_handles(handles: Vec<RemoteHandle<i64>>) -> Vec<i64> {
+async fn get_remote_handles(handles: Vec<future::RemoteHandle<i64>>) -> Vec<i64> {
     let mut ret = Vec::with_capacity(handles.len());
     for handle in handles {
         ret.push(handle.await);
@@ -171,7 +177,13 @@ async fn get_remote_handles(handles: Vec<RemoteHandle<i64>>) -> Vec<i64> {
 }
 
 // Spawns the next job after the previous one completes via tokio.
-fn tokio_chained(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, parallelism: usize, result: i64) {
+fn tokio_chained(
+    rt: &tokio::runtime::Runtime,
+    job_size: i64,
+    num_jobs: usize,
+    parallelism: usize,
+    result: i64,
+) {
     let mut handles = Vec::with_capacity(num_jobs);
     for _ in 0..parallelism {
         handles.push(rt.spawn(chained_future(job_size, num_jobs)));
@@ -183,7 +195,13 @@ fn tokio_chained(rt: &tokio::runtime::Runtime, job_size: i64, num_jobs: usize, p
 }
 
 // Spawns the next job after the previous one completes via futures.
-fn futures_chained(tp: &futures::executor::ThreadPool, job_size: i64, num_jobs: usize, parallelism: usize, result: i64) {
+fn futures_chained(
+    tp: &futures::executor::ThreadPool,
+    job_size: i64,
+    num_jobs: usize,
+    parallelism: usize,
+    result: i64,
+) {
     let mut handles = Vec::with_capacity(num_jobs);
     for _ in 0..parallelism {
         handles.push(tp.spawn_with_handle(chained_future(job_size, num_jobs)).unwrap());
@@ -203,16 +221,30 @@ fn run_simple_bench(
 ) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("threadpool/job_size={} num_cpus={}", job_size, ncpu));
+    let mut group = c.benchmark_group(format!("threadpool/job_size={} num_cpus={}",
+                                              job_size, ncpu));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
-    group.sample_size(10)
-        .bench_function("single thread", |b| b.iter(|| single_threaded(black_box(job_size), NUM_JOBS)));
-    group.bench_function("rayon par iter", |b| b.iter(|| rayon_par_iter(black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("rayon simple", |b| b.iter(|| rayon_simple(black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("rayon fifo", |b| b.iter(|| rayon_fifo(black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("tokio simple", |b| b.iter(|| tokio_simple(rt, black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("futures simple", |b| b.iter(|| futures_simple(tp, black_box(job_size), NUM_JOBS, result)));
-    group.bench_function("futures accum", |b| b.iter(|| futures_accum(tp, black_box(job_size), NUM_JOBS, result)));
+    group.sample_size(10).bench_function("single thread", |b| {
+        b.iter(|| single_threaded(black_box(job_size), NUM_JOBS))
+    });
+    group.bench_function("rayon par iter", |b| {
+        b.iter(|| rayon_par_iter(black_box(job_size), NUM_JOBS, result))
+    });
+    group.bench_function("rayon simple", |b| {
+        b.iter(|| rayon_simple(black_box(job_size), NUM_JOBS, result))
+    });
+    group.bench_function("rayon fifo", |b| {
+        b.iter(|| rayon_fifo(black_box(job_size), NUM_JOBS, result))
+    });
+    group.bench_function("tokio simple", |b| {
+        b.iter(|| tokio_simple(rt, black_box(job_size), NUM_JOBS, result))
+    });
+    group.bench_function("futures simple", |b| {
+        b.iter(|| futures_simple(tp, black_box(job_size), NUM_JOBS, result))
+    });
+    group.bench_function("futures accum", |b| {
+        b.iter(|| futures_accum(tp, black_box(job_size), NUM_JOBS, result))
+    });
     group.finish();
 }
 
@@ -226,16 +258,24 @@ fn run_chained_bench(
 ) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("threadpool/chained parallel={} job_size={} num_cpus={}",
-                                              parallelism, job_size, ncpu));
+    let mut group = c.benchmark_group(
+        format!("threadpool/chained parallel={} job_size={} num_cpus={}",
+                parallelism, job_size, ncpu));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
     if parallelism == 1 {
-        group.sample_size(10)
-            .bench_function("single thread", |b| b.iter(|| single_threaded(black_box(job_size), NUM_JOBS)));
+        group.sample_size(10).bench_function("single thread", |b| {
+            b.iter(|| single_threaded(black_box(job_size), NUM_JOBS))
+        });
     }
-    group.bench_function("rayon", |b| b.iter(|| rayon_chained(black_box(job_size), NUM_JOBS, parallelism, result)));
-    group.bench_function("tokio", |b| b.iter(|| tokio_chained(rt, black_box(job_size), NUM_JOBS, parallelism, result)));
-    group.bench_function("futures", |b| b.iter(|| futures_chained(tp, black_box(job_size), NUM_JOBS, parallelism, result)));
+    group.bench_function("rayon", |b| b.iter(|| {
+        rayon_chained(black_box(job_size), NUM_JOBS, parallelism, result)
+    }));
+    group.bench_function("tokio", |b| {
+        b.iter(|| tokio_chained(rt, black_box(job_size), NUM_JOBS, parallelism, result))
+    });
+    group.bench_function("futures", |b| {
+        b.iter(|| futures_chained(tp, black_box(job_size), NUM_JOBS, parallelism, result))
+    });
     group.finish();
 }
 
