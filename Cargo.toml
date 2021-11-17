@@ -15,12 +15,18 @@ name = "audio"
 harness = false
 
 [[bench]]
+name = "matrix_mul"
+harness = false
+
+[[bench]]
 name = "threadpool"
 harness = false
 
 [dependencies]
 anyhow = "^1.0"
+bytemuck = { version = "^1.7", features = ["derive"] }
 futures = { version = "^0.3", features = ["thread-pool"] }
+glam = { version = "^0.20", features = ["bytemuck"] }
 hound = "^3.4"
 num_cpus = "^1.13"
 oddio = "^0.4"
@@ -35,6 +41,7 @@ sdl2 = { version = "^0.35", features = ["bundled"] }
 # The version published at crates.io looks really old.
 speexdsp-resampler = { git = "https://github.com/rust-av/speexdsp-rs", package = "speexdsp-resampler" }
 tokio = { version = "^1.11", features = ["full"] }
+wgpu = "^0.11"
 
 [dev-dependencies]
 criterion = "^0.3"
