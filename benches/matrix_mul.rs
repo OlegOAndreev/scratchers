@@ -374,11 +374,15 @@ fn bench_rayon_vec4_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
 
 fn matrix_vec_multiply(c: &mut Criterion) {
     let ncpu = init_rayon();
-    for K in [16, 100, 128, 1000] {
-        for L in [10, 128] {
-            for M in [1, 64, 500] {
+    for K in [16usize, 100usize, 128usize, 1000usize] {
+        for L in [10usize, 128usize] {
+            for M in [1usize, 64usize, 500usize] {
                 let mut group = c.benchmark_group(
                     format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
+
+                // Compute ~throughput in Gflops.
+                group.throughput(criterion::Throughput::Elements(
+                    K as u64 * L as u64 * M as u64 * 2));
 
                 let mut input = prepare_matrix_vec_multiply_input(K, L, M);
                 bench_single_thread_matrix_vec_multiply(&input);
