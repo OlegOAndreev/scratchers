@@ -242,6 +242,12 @@ impl AlignedVec {
         &mut self.storage[..]
     }
 
+    // Puts the Vec4 element by index.
+    #[inline(always)]
+    pub fn put_vec4(&mut self, index: usize, value: Vec4) {
+        self.storage[index] = value;
+    }
+
     // Returns slice of f32 elements.
     #[inline(always)]
     pub fn as_f32_slice<S>(&self, bounds: S) -> &[f32]

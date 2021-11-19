@@ -1,10 +1,11 @@
 #![allow(non_snake_case)]
 
 use std::cell::RefCell;
-use std::ops::Range;
+use std::ops::{DerefMut, Range};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use criterion::{Criterion, criterion_group, criterion_main};
+// use futures::executor;
 use glam::{Mat4, Vec4};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};
@@ -17,8 +18,64 @@ static RAYON_GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 // struct GpuInput {
 //     instance: wgpu::Instance,
 //     device: wgpu::Device,
+//     queue: wgpu::Queue,
 // }
-
+//
+// impl GpuInput {
+//     const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
+//
+//     fn new(discrete: bool) -> Option<Self> {
+//         let instance = wgpu::Instance::new(Self::BACKENDS);
+//         let adapter = Self::find_adapter(&instance, discrete)?;
+//         let adapter_info = adapter.get_info();
+//         println!("Using adapter {:?}", adapter_info);
+//         println!("Adapter limits: {:?}", adapter.limits());
+//         println!("Adapter features: {:?}", adapter.features());
+//
+//         let (device, queue) = executor::block_on(Self::request_device(&adapter, discrete));
+//         Some(Self {
+//             instance,
+//             device,
+//             queue,
+//         })
+//     }
+//
+//     fn find_adapter(instance: &wgpu::Instance, discrete: bool) -> Option<wgpu::Adapter> {
+//         instance.enumerate_adapters(Self::BACKENDS)
+//             .find(|a| if discrete {
+//                 a.get_info().device_type == wgpu::DeviceType::DiscreteGpu
+//             } else {
+//                 a.get_info().device_type == wgpu::DeviceType::IntegratedGpu
+//             })
+//     }
+//
+//     async fn request_device(
+//         adapter: &wgpu::Adapter,
+//         discrete: bool,
+//     ) -> (wgpu::Device, wgpu::Queue) {
+//         let trace_dir = std::env::var("WGPU_TRACE");
+//         let features = Self::desired_features(adapter.features(), discrete);
+//         match adapter.request_device(
+//             &wgpu::DeviceDescriptor {
+//                 features,
+//                 ..Default::default()
+//             },
+//             trace_dir.ok().as_ref().map(std::path::Path::new),
+//         ).await {
+//             Ok((device, queue)) => (device, queue),
+//             Err(e) => panic!("Failed to request device: {}", e),
+//         }
+//     }
+//
+//     fn desired_features(features: wgpu::Features, discrete: bool) -> wgpu::Features {
+//         let features = if discrete {
+//             features & wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
+//         } else {
+//             features
+//         };
+//         features & wgpu::Features::PIPELINE_STATISTICS_QUERY
+//     }
+// }
 
 // Matrix-vector multiplication.
 
@@ -112,8 +169,6 @@ fn standard_matrix_vec_mul(
 }
 
 // Basic SIMD algorithm: load Vec4 from src vector and multiply it by 4 matrix rows.
-// TODO: Add a second version that would multiply several src vectors at once by chunks of 8
-// to improve cache utilization.
 fn vec4_matrix_vec_mul(
     src_mat: &AlignedMatrix,
     src_vec: &AlignedVec,
@@ -203,8 +258,6 @@ fn vec4_matrix_vec_mul(
 // A variation of vec4_matrix_vec_mul which keeps 4 horizontal sums and sums them only at the end.
 // It reorders the operations (s[0] + s[4] + s[8] + ... + s[1] + s[5] + ...) and requires higher
 // tolerances when comparing against golden results.
-// TODO: Add a second version that would multiply several src vectors at once by chunks of 8
-// to improve cache utilization.
 fn vec4_matrix_vec_mul_v2(
     src_mat: &AlignedMatrix,
     src_vec: &AlignedVec,
@@ -215,10 +268,10 @@ fn vec4_matrix_vec_mul_v2(
     let dst_slice = dst_vec.as_vec4_mut();
     let last_l = (dst_len / 4) * 4;
     for l in (0..last_l).step_by(4) {
-        let mut sum0 = Vec4::ZERO;
-        let mut sum1 = Vec4::ZERO;
-        let mut sum2 = Vec4::ZERO;
-        let mut sum3 = Vec4::ZERO;
+        let mut accum0 = Vec4::ZERO;
+        let mut accum1 = Vec4::ZERO;
+        let mut accum2 = Vec4::ZERO;
+        let mut accum3 = Vec4::ZERO;
         let mat_row0 = src_mat.as_vec4(l);
         let mat_row1 = src_mat.as_vec4(l + 1);
         let mat_row2 = src_mat.as_vec4(l + 2);
@@ -230,20 +283,20 @@ fn vec4_matrix_vec_mul_v2(
             .zip(mat_row1)
             .zip(mat_row2)
             .zip(mat_row3) {
-            sum0 += src * m0;
-            sum1 += src * m1;
-            sum2 += src * m2;
-            sum3 += src * m3;
+            accum0 += src * m0;
+            accum1 += src * m1;
+            accum2 += src * m2;
+            accum3 += src * m3;
         }
-        let sum = Mat4::from_cols(sum0, sum1, sum2, sum3).transpose();
+        let sum = Mat4::from_cols(accum0, accum1, accum2, accum3).transpose();
         dst_slice[l / 4] = sum.x_axis + sum.y_axis + sum.z_axis + sum.w_axis;
     }
     // Compute the remaining 0-3 elements.
     match dst_len - last_l {
         3 => {
-            let mut sum0 = Vec4::ZERO;
-            let mut sum1 = Vec4::ZERO;
-            let mut sum2 = Vec4::ZERO;
+            let mut accum0 = Vec4::ZERO;
+            let mut accum1 = Vec4::ZERO;
+            let mut accum2 = Vec4::ZERO;
             let mat_row0 = src_mat.as_vec4(last_l);
             let mat_row1 = src_mat.as_vec4(last_l + 1);
             let mat_row2 = src_mat.as_vec4(last_l + 2);
@@ -253,16 +306,16 @@ fn vec4_matrix_vec_mul_v2(
                 .zip(mat_row0)
                 .zip(mat_row1)
                 .zip(mat_row2) {
-                sum0 += src * m0;
-                sum1 += src * m1;
-                sum2 += src * m2;
+                accum0 += src * m0;
+                accum1 += src * m1;
+                accum2 += src * m2;
             }
-            let sum = Mat4::from_cols(sum0, sum1, sum2, Vec4::ZERO).transpose();
+            let sum = Mat4::from_cols(accum0, accum1, accum2, Vec4::ZERO).transpose();
             dst_slice[last_l / 4] = sum.x_axis + sum.y_axis + sum.z_axis + sum.w_axis;
         }
         2 => {
-            let mut sum0 = Vec4::ZERO;
-            let mut sum1 = Vec4::ZERO;
+            let mut accum0 = Vec4::ZERO;
+            let mut accum1 = Vec4::ZERO;
             let mat_row0 = src_mat.as_vec4(last_l);
             let mat_row1 = src_mat.as_vec4(last_l + 1);
             // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if and only
@@ -270,26 +323,240 @@ fn vec4_matrix_vec_mul_v2(
             for ((&src, &m0), &m1) in src_slice.iter()
                 .zip(mat_row0)
                 .zip(mat_row1) {
-                sum0 += src * m0;
-                sum1 += src * m1;
+                accum0 += src * m0;
+                accum1 += src * m1;
             }
-            let sum = Mat4::from_cols(sum0, sum1, Vec4::ZERO, Vec4::ZERO).transpose();
+            let sum = Mat4::from_cols(accum0, accum1, Vec4::ZERO, Vec4::ZERO).transpose();
             dst_slice[last_l / 4] = sum.x_axis + sum.y_axis + sum.z_axis + sum.w_axis;
         }
         1 => {
-            let mut sum0 = Vec4::ZERO;
+            let mut accum0 = Vec4::ZERO;
             let mat_row0 = src_mat.as_vec4(last_l);
             // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if and only
             // if at least one of the margins (either matrix or vec) is filled with zeroes.
             for (&src, &m0) in src_slice.iter()
                 .zip(mat_row0) {
-                sum0 += src * m0;
+                accum0 += src * m0;
             }
-            let sum = Mat4::from_cols(sum0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
+            let sum = Mat4::from_cols(accum0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
             dst_slice[last_l / 4] = sum.x_axis + sum.y_axis + sum.z_axis + sum.w_axis;
         }
         0 => {}
         _ => unreachable!("Bad remainder: {}, {}", last_l, dst_len)
+    }
+}
+
+// An improved version of vec4_matrix_vec_mul_v2: process multiple src_vecs at once. We manually
+// unroll the inner loop to not depend on Rust unroller.
+fn vec4_matrix_vec_mul_v3(
+    src_mat: &AlignedMatrix,
+    src_vecs: &[AlignedVec],
+    dst_vecs: &mut [AlignedVec],
+) {
+    let last_src_idx = (src_vecs.len() / 4) * 4;
+    for src_idx in (0..last_src_idx).step_by(4) {
+        let dst_len = dst_vecs[src_idx].len();
+        let src_slice0 = src_vecs[src_idx].as_vec4();
+        let src_slice1 = src_vecs[src_idx + 1].as_vec4();
+        let src_slice2 = src_vecs[src_idx + 2].as_vec4();
+        let src_slice3 = src_vecs[src_idx + 3].as_vec4();
+        let last_l = (dst_len / 4) * 4;
+        for l in (0..last_l).step_by(4) {
+            let mut accum0x0 = Vec4::ZERO;
+            let mut accum1x0 = Vec4::ZERO;
+            let mut accum2x0 = Vec4::ZERO;
+            let mut accum3x0 = Vec4::ZERO;
+            let mut accum0x1 = Vec4::ZERO;
+            let mut accum1x1 = Vec4::ZERO;
+            let mut accum2x1 = Vec4::ZERO;
+            let mut accum3x1 = Vec4::ZERO;
+            let mut accum0x2 = Vec4::ZERO;
+            let mut accum1x2 = Vec4::ZERO;
+            let mut accum2x2 = Vec4::ZERO;
+            let mut accum3x2 = Vec4::ZERO;
+            let mut accum0x3 = Vec4::ZERO;
+            let mut accum1x3 = Vec4::ZERO;
+            let mut accum2x3 = Vec4::ZERO;
+            let mut accum3x3 = Vec4::ZERO;
+            let mat_row0 = src_mat.as_vec4(l);
+            let mat_row1 = src_mat.as_vec4(l + 1);
+            let mat_row2 = src_mat.as_vec4(l + 2);
+            let mat_row3 = src_mat.as_vec4(l + 3);
+            // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if and
+            // only if at least one of the margins (either matrix or vec) is filled with zeroes.
+            for (((((((&src0, &src1), &src2), &src3), &m0), &m1), &m2), &m3) in src_slice0.iter()
+                .zip(src_slice1)
+                .zip(src_slice2)
+                .zip(src_slice3)
+                .zip(mat_row0)
+                .zip(mat_row1)
+                .zip(mat_row2)
+                .zip(mat_row3) {
+                accum0x0 += src0 * m0;
+                accum0x1 += src0 * m1;
+                accum0x2 += src0 * m2;
+                accum0x3 += src0 * m3;
+                accum1x0 += src1 * m0;
+                accum1x1 += src1 * m1;
+                accum1x2 += src1 * m2;
+                accum1x3 += src1 * m3;
+                accum2x0 += src2 * m0;
+                accum2x1 += src2 * m1;
+                accum2x2 += src2 * m2;
+                accum2x3 += src2 * m3;
+                accum3x0 += src3 * m0;
+                accum3x1 += src3 * m1;
+                accum3x2 += src3 * m2;
+                accum3x3 += src3 * m3;
+            }
+            let sum0 = Mat4::from_cols(accum0x0, accum0x1, accum0x2, accum0x3).transpose();
+            dst_vecs[src_idx].put_vec4(l / 4, sum0.x_axis + sum0.y_axis + sum0.z_axis
+                + sum0.w_axis);
+            let sum1 = Mat4::from_cols(accum1x0, accum1x1, accum1x2, accum1x3).transpose();
+            dst_vecs[src_idx + 1].put_vec4(l / 4, sum1.x_axis + sum1.y_axis + sum1.z_axis
+                + sum1.w_axis);
+            let sum2 = Mat4::from_cols(accum2x0, accum2x1, accum2x2, accum2x3).transpose();
+            dst_vecs[src_idx + 2].put_vec4(l / 4, sum2.x_axis + sum2.y_axis + sum2.z_axis
+                + sum2.w_axis);
+            let sum3 = Mat4::from_cols(accum3x0, accum3x1, accum3x2, accum3x3).transpose();
+            dst_vecs[src_idx + 3].put_vec4(l / 4, sum3.x_axis + sum3.y_axis + sum3.z_axis
+                + sum3.w_axis);
+        }
+        // Compute the remaining 0-3 elements.
+        match dst_len - last_l {
+            3 => {
+                let mut accum0x0 = Vec4::ZERO;
+                let mut accum0x1 = Vec4::ZERO;
+                let mut accum0x2 = Vec4::ZERO;
+                let mut accum1x0 = Vec4::ZERO;
+                let mut accum1x1 = Vec4::ZERO;
+                let mut accum1x2 = Vec4::ZERO;
+                let mut accum2x0 = Vec4::ZERO;
+                let mut accum2x1 = Vec4::ZERO;
+                let mut accum2x2 = Vec4::ZERO;
+                let mut accum3x0 = Vec4::ZERO;
+                let mut accum3x1 = Vec4::ZERO;
+                let mut accum3x2 = Vec4::ZERO;
+                let mat_row0 = src_mat.as_vec4(last_l);
+                let mat_row1 = src_mat.as_vec4(last_l + 1);
+                let mat_row2 = src_mat.as_vec4(last_l + 2);
+                // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if
+                // and only if at least one of the margins (either matrix or vec) is filled with
+                // zeroes.
+                for ((((((&src0, &src1), &src2), &src3), &m0), &m1), &m2) in src_slice0.iter()
+                    .zip(src_slice1)
+                    .zip(src_slice2)
+                    .zip(src_slice3)
+                    .zip(mat_row0)
+                    .zip(mat_row1)
+                    .zip(mat_row2) {
+                    accum0x0 += src0 * m0;
+                    accum0x1 += src0 * m1;
+                    accum0x2 += src0 * m2;
+                    accum1x0 += src1 * m0;
+                    accum1x1 += src1 * m1;
+                    accum1x2 += src1 * m2;
+                    accum2x0 += src2 * m0;
+                    accum2x1 += src2 * m1;
+                    accum2x2 += src2 * m2;
+                    accum3x0 += src3 * m0;
+                    accum3x1 += src3 * m1;
+                    accum3x2 += src3 * m2;
+                }
+                let sum0 = Mat4::from_cols(accum0x0, accum0x1, accum0x2, Vec4::ZERO).transpose();
+                dst_vecs[src_idx].put_vec4(last_l / 4, sum0.x_axis + sum0.y_axis + sum0.z_axis
+                    + sum0.w_axis);
+                let sum1 = Mat4::from_cols(accum1x0, accum1x1, accum1x2, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 1].put_vec4(last_l / 4, sum1.x_axis + sum1.y_axis + sum1.z_axis
+                    + sum1.w_axis);
+                let sum2 = Mat4::from_cols(accum2x0, accum2x1, accum2x2, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 2].put_vec4(last_l / 4, sum2.x_axis + sum2.y_axis + sum2.z_axis
+                    + sum2.w_axis);
+                let sum3 = Mat4::from_cols(accum3x0, accum3x1, accum3x2, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 3].put_vec4(last_l / 4, sum3.x_axis + sum3.y_axis + sum3.z_axis
+                    + sum3.w_axis);
+            }
+            2 => {
+                let mut accum0x0 = Vec4::ZERO;
+                let mut accum0x1 = Vec4::ZERO;
+                let mut accum1x0 = Vec4::ZERO;
+                let mut accum1x1 = Vec4::ZERO;
+                let mut accum2x0 = Vec4::ZERO;
+                let mut accum2x1 = Vec4::ZERO;
+                let mut accum3x0 = Vec4::ZERO;
+                let mut accum3x1 = Vec4::ZERO;
+                let mat_row0 = src_mat.as_vec4(last_l);
+                let mat_row1 = src_mat.as_vec4(last_l + 1);
+                // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if
+                // and only if at least one of the margins (either matrix or vec) is filled with
+                // zeroes.
+                for (((((&src0, &src1), &src2), &src3), &m0), &m1) in src_slice0.iter()
+                    .zip(src_slice1)
+                    .zip(src_slice2)
+                    .zip(src_slice3)
+                    .zip(mat_row0)
+                    .zip(mat_row1) {
+                    accum0x0 += src0 * m0;
+                    accum0x1 += src0 * m1;
+                    accum1x0 += src1 * m0;
+                    accum1x1 += src1 * m1;
+                    accum2x0 += src2 * m0;
+                    accum2x1 += src2 * m1;
+                    accum3x0 += src3 * m0;
+                    accum3x1 += src3 * m1;
+                }
+                let sum0 = Mat4::from_cols(accum0x0, accum0x1, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx].put_vec4(last_l / 4, sum0.x_axis + sum0.y_axis + sum0.z_axis
+                    + sum0.w_axis);
+                let sum1 = Mat4::from_cols(accum1x0, accum1x1, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 1].put_vec4(last_l / 4, sum1.x_axis + sum1.y_axis + sum1.z_axis
+                    + sum1.w_axis);
+                let sum2 = Mat4::from_cols(accum2x0, accum2x1, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 2].put_vec4(last_l / 4, sum2.x_axis + sum2.y_axis + sum2.z_axis
+                    + sum2.w_axis);
+                let sum3 = Mat4::from_cols(accum3x0, accum3x1, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 3].put_vec4(last_l / 4, sum3.x_axis + sum3.y_axis + sum3.z_axis
+                    + sum3.w_axis);
+            }
+            1 => {
+                let mut accum0x0 = Vec4::ZERO;
+                let mut accum1x0 = Vec4::ZERO;
+                let mut accum2x0 = Vec4::ZERO;
+                let mut accum3x0 = Vec4::ZERO;
+                let mat_row0 = src_mat.as_vec4(last_l);
+                // NOTE: We read into the AlignedVec/AlignedMatrix margin here. This is correct if
+                // and only if at least one of the margins (either matrix or vec) is filled with
+                // zeroes.
+                for ((((&src0, &src1), &src2), &src3), &m0) in src_slice0.iter()
+                    .zip(src_slice1)
+                    .zip(src_slice2)
+                    .zip(src_slice3)
+                    .zip(mat_row0) {
+                    accum0x0 += src0 * m0;
+                    accum1x0 += src1 * m0;
+                    accum2x0 += src2 * m0;
+                    accum3x0 += src3 * m0;
+                }
+                let sum0 = Mat4::from_cols(accum0x0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx].put_vec4(last_l / 4, sum0.x_axis + sum0.y_axis + sum0.z_axis
+                    + sum0.w_axis);
+                let sum1 = Mat4::from_cols(accum1x0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 1].put_vec4(last_l / 4, sum1.x_axis + sum1.y_axis + sum1.z_axis
+                    + sum1.w_axis);
+                let sum2 = Mat4::from_cols(accum2x0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 2].put_vec4(last_l / 4, sum2.x_axis + sum2.y_axis + sum2.z_axis
+                    + sum2.w_axis);
+                let sum3 = Mat4::from_cols(accum3x0, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO).transpose();
+                dst_vecs[src_idx + 3].put_vec4(last_l / 4, sum3.x_axis + sum3.y_axis + sum3.z_axis
+                    + sum3.w_axis);
+            }
+            0 => {}
+            _ => unreachable!("Bad remainder: {}, {}", last_l, dst_len)
+        }
+    }
+
+    for src_idx in last_src_idx..src_vecs.len() {
+        vec4_matrix_vec_mul_v2(src_mat, &src_vecs[src_idx], &mut dst_vecs[src_idx]);
     }
 }
 
@@ -312,6 +579,10 @@ fn bench_vec4_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
         .iter_mut().zip(&input.src_vecs) {
         vec4_matrix_vec_mul_v2(&input.src_mat, src_vec, dst_vec);
     }
+}
+
+fn bench_vec4_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
+    vec4_matrix_vec_mul_v3(&input.src_mat, &input.src_vecs, input.dst_vecs.borrow_mut().deref_mut());
 }
 
 fn bench_rayon_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
@@ -337,9 +608,7 @@ fn bench_rayon_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
 fn bench_rayon_vec4_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
     let K = input.K;
     let src_mat = &input.src_mat;
-    let chunk_size = if K >= 64 {
-        1
-    } else if K >= 32 {
+    let chunk_size = if K >= 32 {
         4
     } else {
         8
@@ -372,10 +641,28 @@ fn bench_rayon_vec4_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
         });
 }
 
+fn bench_rayon_vec4_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
+    let K = input.K;
+    let src_mat = &input.src_mat;
+    let chunk_size = if K >= 32 {
+        4
+    } else {
+        8
+    };
+    input.dst_vecs.borrow_mut().par_chunks_mut(chunk_size)
+        .zip_eq(input.src_vecs.par_chunks(chunk_size))
+        .for_each(|(dst_vec_chunk, src_vec_chunk)| {
+            vec4_matrix_vec_mul_v3(src_mat, src_vec_chunk, dst_vec_chunk);
+        });
+}
+
 fn matrix_vec_multiply(c: &mut Criterion) {
     let ncpu = init_rayon();
+    // let integrated_gpu = GpuInput::new(false);
+    // let discrete_gpu = GpuInput::new(true);
+
     for K in [16usize, 100usize, 128usize, 1000usize] {
-        for L in [10usize, 128usize] {
+        for L in [10usize, 128usize, 1000usize] {
             for M in [1usize, 64usize, 500usize] {
                 let mut group = c.benchmark_group(
                     format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
@@ -403,6 +690,11 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                     input.compare_golden_dst();
                 });
 
+                group.bench_function("v3 vec4 single thread", |b| {
+                    b.iter(|| bench_vec4_matrix_vec_multiply_v3(&input));
+                    input.compare_golden_dst();
+                });
+
                 if M > 1 {
                     group.bench_function(format!("{} threads", ncpu), |b| {
                         b.iter(|| bench_rayon_matrix_vec_multiply(&input));
@@ -416,6 +708,11 @@ fn matrix_vec_multiply(c: &mut Criterion) {
 
                     group.bench_function(format!("v2 vec4 {} threads", ncpu), |b| {
                         b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v2(&input));
+                        input.compare_golden_dst();
+                    });
+
+                    group.bench_function(format!("v3 vec4 {} threads", ncpu), |b| {
+                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v3(&input));
                         input.compare_golden_dst();
                     });
                 }
