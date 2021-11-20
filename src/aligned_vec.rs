@@ -157,6 +157,18 @@ impl AlignedMatrix {
         };
         &mut self.storage[row_start + start..row_start + end]
     }
+
+    // Returns slice of f32 elements for all rows. Useful for interacting with external code.
+    #[inline(always)]
+    pub fn as_f32_whole(&self) -> &[f32] {
+        bytemuck::cast_slice(&self.storage)
+    }
+
+    // Returns mutable slice of f32 elements for all rows. Useful for interacting with external code.
+    #[inline(always)]
+    pub fn as_f32_whole_mut(&mut self) -> &mut [f32] {
+        bytemuck::cast_slice_mut(&mut self.storage)
+    }
 }
 
 impl Index<usize> for AlignedMatrix {

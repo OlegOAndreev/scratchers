@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic;
+use std::sync::atomic::{AtomicU64};
 
 use parking_lot::{Condvar, Mutex};
 
@@ -18,10 +19,14 @@ impl AtomicLatch {
         }
     }
 
+    pub fn add(&self) {
+        self.count.fetch_add(1, atomic::Ordering::AcqRel);
+    }
+
     pub fn done(&self) {
         // We need to use Acquire-Release here because all producers running done() must synchronize
         // with consumers running wait().
-        let v = self.count.fetch_sub(1, Ordering::Release);
+        let v = self.count.fetch_sub(1, atomic::Ordering::Release);
         if v == 0 {
             panic!("done called more than count times")
         } else if v == 1 {
@@ -35,7 +40,7 @@ impl AtomicLatch {
 
     pub fn wait(&self) {
         let mut guard = self.mutex.lock();
-        if self.count.load(Ordering::Acquire) == 0 {
+        if self.count.load(atomic::Ordering::Acquire) == 0 {
             return;
         }
         self.condvar.wait(&mut guard);

@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, atomic, Mutex};
+use std::sync::atomic::{AtomicBool};
 
 use anyhow::{bail, Result};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -394,7 +394,7 @@ fn read_audio(data: &[u8]) -> Result<(Vec<f32>, u32)> {
 // Debug utilities.
 
 fn debug_write_to_file(prefix: &str, rate: u32, buf: &[(f32, f32)]) {
-    if !DEBUG_WRITE_TO_FILE.load(Ordering::SeqCst) {
+    if !DEBUG_WRITE_TO_FILE.load(atomic::Ordering::SeqCst) {
         return;
     }
 
@@ -416,7 +416,7 @@ fn debug_write_to_file(prefix: &str, rate: u32, buf: &[(f32, f32)]) {
 }
 
 fn debug_write_to_file_arr(prefix: &str, rate: u32, buf: &[[f32; 2]]) {
-    if !DEBUG_WRITE_TO_FILE.load(Ordering::SeqCst) {
+    if !DEBUG_WRITE_TO_FILE.load(atomic::Ordering::SeqCst) {
         return;
     }
 
@@ -440,7 +440,7 @@ fn debug_write_to_file_arr(prefix: &str, rate: u32, buf: &[[f32; 2]]) {
 // Benchmarks audio mixers.
 pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
     if std::env::var("DEBUG_WRITE_TO_FILE").is_ok() {
-        DEBUG_WRITE_TO_FILE.store(true, Ordering::SeqCst);
+        DEBUG_WRITE_TO_FILE.store(true, atomic::Ordering::SeqCst);
     }
 
     let beep_data: Vec<u8> = fs::read("benches/data/beep.wav").unwrap();
@@ -757,7 +757,7 @@ fn bench_resample_sdl2(
 // Benchmarks audio resamplers.
 pub fn audio_resampler_benchmark(c: &mut Criterion) {
     if std::env::var("DEBUG_WRITE_TO_FILE").is_ok() {
-        DEBUG_WRITE_TO_FILE.store(true, Ordering::SeqCst);
+        DEBUG_WRITE_TO_FILE.store(true, atomic::Ordering::SeqCst);
     }
 
     {

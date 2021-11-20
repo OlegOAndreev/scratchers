@@ -2,7 +2,8 @@
 
 use std::cell::RefCell;
 use std::ops::{DerefMut, Range};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic;
+use std::sync::atomic::AtomicBool;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 // use futures::executor;
@@ -111,11 +112,11 @@ impl MatrixVecMultiplyInput {
         for (golden_dst_vec, dst_vec) in self.golden_dst_vecs.iter()
             .zip(self.dst_vecs.borrow().iter()) {
             assert_eq!(golden_dst_vec.len(), dst_vec.len());
-            for (g, d) in golden_dst_vec.iter().zip(dst_vec.iter()) {
+            for (i, (g, d)) in golden_dst_vec.iter().zip(dst_vec.iter()).enumerate() {
                 let diff = (g - d).abs();
                 let max = g.abs().max(d.abs());
                 if diff > f32::EPSILON && diff / max >= tolerance {
-                    assert!(false, "Different values: {} vs {}", g, d);
+                    assert!(false, "Different values [{}]: {} vs {}", i, g, d);
                 }
             }
         }
@@ -965,6 +966,147 @@ fn vec4_matrix_vec_mul_v3(
 //     }
 // }
 
+extern "C" {
+    #[cfg(feature = "ispc")]
+    pub fn ispc_matrix_vec_mul_v1(
+        src_mat: *const f32,
+        src_mat_stride: i32,
+        src_vec: *const f32,
+        dst_vec: *mut f32,
+        K: i32,
+        L: i32,
+    );
+
+    #[cfg(feature = "ispc")]
+    pub fn ispc_matrix_vec_mul_v1_launch(
+        src_mat: *const f32,
+        src_mat_stride: i32,
+        src_vec: *const f32,
+        dst_vec: *mut f32,
+        K: i32,
+        L: i32,
+    );
+
+    #[cfg(feature = "ispc")]
+    pub fn ispc_matrix_vec_mul_v2(
+        src_mat: *const f32,
+        src_mat_stride: i32,
+        src_vec: *const f32,
+        dst_vec: *mut f32,
+        K: i32,
+        L: i32,
+    );
+
+    #[cfg(feature = "ispc")]
+    pub fn ispc_matrix_vec_mul_v3(
+        src_mat: *const f32,
+        src_mat_stride: i32,
+        src_vec0: *const f32,
+        src_vec1: *const f32,
+        src_vec2: *const f32,
+        src_vec3: *const f32,
+        dst_vec0: *mut f32,
+        dst_vec1: *mut f32,
+        dst_vec2: *mut f32,
+        dst_vec3: *mut f32,
+        K: i32,
+        L: i32,
+    );
+}
+
+#[cfg(feature = "ispc")]
+pub fn ispc_matrix_vec_mul_v1_wrapper(
+    src_mat: &AlignedMatrix,
+    src_vec: &AlignedVec,
+    dst_vec: &mut AlignedVec,
+) {
+    let src_mat_slice = src_mat.as_f32_whole();
+    let src_mat_stride = src_mat_slice.len() / src_mat.height();
+    unsafe {
+        ispc_matrix_vec_mul_v1(
+            src_mat_slice.as_ptr(),
+            src_mat_stride as i32,
+            src_vec.as_f32().as_ptr(),
+            dst_vec.as_f32_mut().as_mut_ptr(),
+            src_vec.len() as i32,
+            dst_vec.len() as i32,
+        );
+    }
+}
+
+#[cfg(feature = "ispc")]
+pub fn ispc_matrix_vec_mul_v1_launch_wrapper(
+    src_mat: &AlignedMatrix,
+    src_vec: &AlignedVec,
+    dst_vec: &mut AlignedVec,
+) {
+    let src_mat_slice = src_mat.as_f32_whole();
+    let src_mat_stride = src_mat_slice.len() / src_mat.height();
+    unsafe {
+        ispc_matrix_vec_mul_v1_launch(
+            src_mat_slice.as_ptr(),
+            src_mat_stride as i32,
+            src_vec.as_f32().as_ptr(),
+            dst_vec.as_f32_mut().as_mut_ptr(),
+            src_vec.len() as i32,
+            dst_vec.len() as i32,
+        );
+    }
+}
+
+#[cfg(feature = "ispc")]
+pub fn ispc_matrix_vec_mul_v2_wrapper(
+    src_mat: &AlignedMatrix,
+    src_vec: &AlignedVec,
+    dst_vec: &mut AlignedVec,
+) {
+    let src_mat_slice = src_mat.as_f32_whole();
+    let src_mat_stride = src_mat_slice.len() / src_mat.height();
+    unsafe {
+        ispc_matrix_vec_mul_v2(
+            src_mat_slice.as_ptr(),
+            src_mat_stride as i32,
+            src_vec.as_f32().as_ptr(),
+            dst_vec.as_f32_mut().as_mut_ptr(),
+            src_vec.len() as i32,
+            dst_vec.len() as i32,
+        );
+    }
+}
+
+#[cfg(feature = "ispc")]
+pub fn ispc_matrix_vec_mul_v3_wrapper(
+    src_mat: &AlignedMatrix,
+    src_vec0: &AlignedVec,
+    src_vec1: &AlignedVec,
+    src_vec2: &AlignedVec,
+    src_vec3: &AlignedVec,
+    dst_vec0: &mut AlignedVec,
+    dst_vec1: &mut AlignedVec,
+    dst_vec2: &mut AlignedVec,
+    dst_vec3: &mut AlignedVec,
+) {
+    let src_mat_slice = src_mat.as_f32_whole();
+    let src_mat_stride = src_mat_slice.len() / src_mat.height();
+    unsafe {
+        ispc_matrix_vec_mul_v3(
+            src_mat_slice.as_ptr(),
+            src_mat_stride as i32,
+            src_vec0.as_f32().as_ptr(),
+            src_vec1.as_f32().as_ptr(),
+            src_vec2.as_f32().as_ptr(),
+            src_vec3.as_f32().as_ptr(),
+            dst_vec0.as_f32_mut().as_mut_ptr(),
+            dst_vec1.as_f32_mut().as_mut_ptr(),
+            dst_vec2.as_f32_mut().as_mut_ptr(),
+            dst_vec3.as_f32_mut().as_mut_ptr(),
+            src_vec0.len() as i32,
+            dst_vec0.len() as i32,
+        );
+    }
+}
+
+
 fn bench_single_thread_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
     for (dst_vec, src_vec) in input.dst_vecs.borrow_mut()
         .iter_mut().zip(&input.src_vecs) {
@@ -990,13 +1132,72 @@ fn bench_vec4_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
     vec4_matrix_vec_mul_v3(&input.src_mat, &input.src_vecs, input.dst_vecs.borrow_mut().deref_mut());
 }
 
+#[cfg(feature = "ispc")]
+fn bench_ispc_matrix_vec_multiply_v1(input: &MatrixVecMultiplyInput) {
+    for (dst_vec, src_vec) in input.dst_vecs.borrow_mut()
+        .iter_mut().zip(&input.src_vecs) {
+        ispc_matrix_vec_mul_v1_wrapper(&input.src_mat, src_vec, dst_vec);
+    }
+}
+
+#[cfg(feature = "ispc")]
+fn bench_ispc_matrix_vec_multiply_v1_launch(input: &MatrixVecMultiplyInput) {
+    for (dst_vec, src_vec) in input.dst_vecs.borrow_mut()
+        .iter_mut().zip(&input.src_vecs) {
+        ispc_matrix_vec_mul_v1_launch_wrapper(&input.src_mat, src_vec, dst_vec);
+    }
+}
+
+#[cfg(feature = "ispc")]
+fn bench_ispc_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
+    for (dst_vec, src_vec) in input.dst_vecs.borrow_mut()
+        .iter_mut().zip(&input.src_vecs) {
+        ispc_matrix_vec_mul_v2_wrapper(&input.src_mat, src_vec, dst_vec);
+    }
+}
+
+#[cfg(feature = "ispc")]
+fn bench_ispc_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
+    let M = input.src_vecs.len();
+    let last_m = (M / 4) * 4;
+    let mut dst_vecs = input.dst_vecs.borrow_mut();
+    for m in (0..last_m).step_by(4) {
+        let (dst_vecs0, dst_vecs1, dst_vecs2, dst_vecs3) = get_mut_by_index_4(&mut dst_vecs, m);
+        ispc_matrix_vec_mul_v3_wrapper(
+            &input.src_mat,
+            &input.src_vecs[m],
+            &input.src_vecs[m + 1],
+            &input.src_vecs[m + 2],
+            &input.src_vecs[m + 3],
+            dst_vecs0,
+            dst_vecs1,
+            dst_vecs2,
+            dst_vecs3,
+        );
+    }
+
+    for m in last_m..M {
+        ispc_matrix_vec_mul_v2_wrapper(&input.src_mat, &input.src_vecs[m], &mut dst_vecs[m]);
+    }
+}
+
+// Unfortunately, Rust does not have convenient wrappers for getting multiple borrows for different
+// slice elements.
+fn get_mut_by_index_4<T>(s: &mut[T], base_index: usize) -> (&mut T, &mut T, &mut T, &mut T) {
+    // This function can be rewritten via split_at_mut() and 4 split_first_mut()s, but it is
+    // a) more code and b) potentially costlier due to bounds checks.
+    assert!(base_index < s.len() && base_index + 4 <= s.len());
+    unsafe {
+        let ptr = s.as_mut_ptr().add(base_index);
+        (&mut *ptr, &mut *ptr.add(1), &mut *ptr.add(2), &mut *ptr.add(3))
+    }
+}
+
 fn bench_rayon_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
     let K = input.K;
     let L = input.L;
     let src_mat = &input.src_mat;
-    let chunk_size = if K >= 64 {
-        1
-    } else if K >= 32 {
+    let chunk_size = if K >= 32 {
         4
     } else {
         8
@@ -1030,9 +1231,7 @@ fn bench_rayon_vec4_matrix_vec_multiply(input: &MatrixVecMultiplyInput) {
 fn bench_rayon_vec4_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
     let K = input.K;
     let src_mat = &input.src_mat;
-    let chunk_size = if K >= 64 {
-        1
-    } else if K >= 32 {
+    let chunk_size = if K >= 32 {
         4
     } else {
         8
@@ -1061,13 +1260,85 @@ fn bench_rayon_vec4_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
         });
 }
 
+#[cfg(feature = "ispc")]
+fn bench_rayon_ispc_matrix_vec_multiply_v1(input: &MatrixVecMultiplyInput) {
+    let K = input.K;
+    let src_mat = &input.src_mat;
+    let chunk_size = if K >= 32 {
+        4
+    } else {
+        8
+    };
+    input.dst_vecs.borrow_mut().par_chunks_mut(chunk_size)
+        .zip_eq(input.src_vecs.par_chunks(chunk_size))
+        .for_each(|(dst_vec_chunk, src_vec_chunk)| {
+            for (dst_vec, src_vec) in dst_vec_chunk.iter_mut().zip(src_vec_chunk) {
+                ispc_matrix_vec_mul_v1_wrapper(src_mat, src_vec, dst_vec);
+            }
+        });
+}
+
+#[cfg(feature = "ispc")]
+fn bench_rayon_ispc_matrix_vec_multiply_v2(input: &MatrixVecMultiplyInput) {
+    let K = input.K;
+    let src_mat = &input.src_mat;
+    let chunk_size = if K >= 32 {
+        4
+    } else {
+        8
+    };
+    input.dst_vecs.borrow_mut().par_chunks_mut(chunk_size)
+        .zip_eq(input.src_vecs.par_chunks(chunk_size))
+        .for_each(|(dst_vec_chunk, src_vec_chunk)| {
+            for (dst_vec, src_vec) in dst_vec_chunk.iter_mut().zip(src_vec_chunk) {
+                ispc_matrix_vec_mul_v2_wrapper(src_mat, src_vec, dst_vec);
+            }
+        });
+}
+
+#[cfg(feature = "ispc")]
+fn bench_rayon_ispc_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
+    let K = input.K;
+    let src_mat = &input.src_mat;
+    let chunk_size = if K >= 32 {
+        4
+    } else {
+        8
+    };
+    input.dst_vecs.borrow_mut().par_chunks_mut(chunk_size)
+        .zip_eq(input.src_vecs.par_chunks(chunk_size))
+        .for_each(|(dst_vec_chunk, src_vec_chunk)| {
+            let M = src_vec_chunk.len();
+            let last_m = (M / 4) * 4;
+            for m in (0..last_m).step_by(4) {
+                let (dst_vecs0, dst_vecs1, dst_vecs2, dst_vecs3)
+                    = get_mut_by_index_4(dst_vec_chunk, m);
+                ispc_matrix_vec_mul_v3_wrapper(
+                    src_mat,
+                    &src_vec_chunk[m],
+                    &src_vec_chunk[m + 1],
+                    &src_vec_chunk[m + 2],
+                    &src_vec_chunk[m + 3],
+                    dst_vecs0,
+                    dst_vecs1,
+                    dst_vecs2,
+                    dst_vecs3,
+                );
+            }
+
+            for m in last_m..M {
+                ispc_matrix_vec_mul_v2_wrapper(src_mat, &src_vec_chunk[m], &mut dst_vec_chunk[m]);
+            }
+        });
+}
+
 fn matrix_vec_multiply(c: &mut Criterion) {
     let ncpu = init_rayon();
     // let integrated_gpu = GpuInput::new(false);
     // let discrete_gpu = GpuInput::new(true);
 
-    for K in [16usize, 100usize, 128usize, 1000usize, 2000usize] {
-        for L in [10usize, 128usize, 1000usize, 2000usize] {
+    for K in [16usize, 100usize, 128usize, 1000usize, 4000usize] {
+        for L in [10usize, 128usize, 1000usize, 4000usize] {
             for M in [1usize, 64usize, 500usize] {
                 let mut group = c.benchmark_group(
                     format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
@@ -1100,6 +1371,24 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                     input.compare_golden_dst();
                 });
 
+                #[cfg(feature = "ispc")]
+                    group.bench_function("v1 ispc single thread", |b| {
+                    b.iter(|| bench_ispc_matrix_vec_multiply_v1(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function("v2 ispc single thread", |b| {
+                    b.iter(|| bench_ispc_matrix_vec_multiply_v2(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function("v3 ispc single thread", |b| {
+                    b.iter(|| bench_ispc_matrix_vec_multiply_v3(&input));
+                    input.compare_golden_dst();
+                });
+
                 if M > 1 {
                     group.bench_function(format!("{} threads", ncpu), |b| {
                         b.iter(|| bench_rayon_matrix_vec_multiply(&input));
@@ -1120,6 +1409,30 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                         b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v3(&input));
                         input.compare_golden_dst();
                     });
+
+                    #[cfg(feature = "ispc")]
+                        group.bench_function("v1 ispc launch", |b| {
+                        b.iter(|| bench_ispc_matrix_vec_multiply_v1_launch(&input));
+                        input.compare_golden_dst();
+                    });
+
+                    #[cfg(feature = "ispc")]
+                        group.bench_function(format!("v1 ispc {} threads", ncpu), |b| {
+                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v1(&input));
+                        input.compare_golden_dst();
+                    });
+
+                    #[cfg(feature = "ispc")]
+                        group.bench_function(format!("v2 ispc {} threads", ncpu), |b| {
+                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v2(&input));
+                        input.compare_golden_dst();
+                    });
+
+                    #[cfg(feature = "ispc")]
+                        group.bench_function(format!("v3 ispc {} threads", ncpu), |b| {
+                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v3(&input));
+                        input.compare_golden_dst();
+                    });
                 }
 
                 group.finish();
@@ -1134,7 +1447,7 @@ fn init_rayon() -> usize {
     } else {
         num_cpus::get_physical()
     };
-    if !RAYON_GLOBAL_INIT.swap(true, Ordering::SeqCst) {
+    if !RAYON_GLOBAL_INIT.swap(true, atomic::Ordering::SeqCst) {
         rayon::ThreadPoolBuilder::new()
             .num_threads(ncpu)
             .build_global()

@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, atomic};
+use std::sync::atomic::{AtomicBool, AtomicI64};
 
 use criterion::{black_box, Criterion, criterion_group, criterion_main};
 use futures::future;
@@ -41,11 +41,11 @@ fn rayon_simple(job_size: i64, num_jobs: usize, result: i64) {
         for i in 0..num_jobs {
             let ret = &ret;
             s.spawn(move |_| {
-                ret.fetch_add(simple_job(job_size, i) as i64, Ordering::Relaxed);
+                ret.fetch_add(simple_job(job_size, i) as i64, atomic::Ordering::Relaxed);
             });
         }
     });
-    assert_eq!(ret.load(Ordering::Relaxed), result);
+    assert_eq!(ret.load(atomic::Ordering::Relaxed), result);
 }
 
 // Spawns each job individually via rayon with spawn_fifo.
@@ -55,11 +55,11 @@ fn rayon_fifo(job_size: i64, num_jobs: usize, result: i64) {
         for i in 0..num_jobs {
             let ret = &ret;
             s.spawn_fifo(move |_| {
-                ret.fetch_add(simple_job(job_size, i) as i64, Ordering::Relaxed);
+                ret.fetch_add(simple_job(job_size, i) as i64, atomic::Ordering::Relaxed);
             });
         }
     });
-    assert_eq!(ret.load(Ordering::Relaxed), result);
+    assert_eq!(ret.load(atomic::Ordering::Relaxed), result);
 }
 
 // This function is required async lambdas are not stabilized.
@@ -69,7 +69,7 @@ async fn simple_future(job_size: i64, start: usize) -> i64 {
 
 async fn accum_future(job_size: i64, start: usize, accum: Arc<AtomicI64>, latch: Arc<AtomicLatch>) {
     let v = simple_job(job_size, start) as i64;
-    accum.fetch_add(v, Ordering::Relaxed);
+    accum.fetch_add(v, atomic::Ordering::Relaxed);
     latch.done();
 }
 
@@ -113,7 +113,7 @@ fn futures_accum(tp: &futures::executor::ThreadPool, job_size: i64, num_jobs: us
         tp.spawn(accum_future(job_size, i, accum.clone(), latch.clone())).unwrap();
     }
     latch.wait();
-    assert_eq!(accum.load(Ordering::Relaxed), result);
+    assert_eq!(accum.load(atomic::Ordering::Relaxed), result);
 }
 
 fn rayon_chained_job<'a>(
@@ -125,7 +125,7 @@ fn rayon_chained_job<'a>(
 ) {
     let v = simple_job(job_size, left_jobs - 1) as i64 + cur;
     if left_jobs == 0 {
-        ret.store(v as i64, Ordering::Relaxed);
+        ret.store(v as i64, atomic::Ordering::Relaxed);
     } else {
         s.spawn(move |s| rayon_chained_job(s, job_size, left_jobs - 1, v, ret));
     }
@@ -144,7 +144,7 @@ fn rayon_chained(job_size: i64, num_jobs: usize, parallelism: usize, result: i64
         }
     });
     for i in 0..parallelism {
-        assert_eq!(ret[i].load(Ordering::Relaxed), result);
+        assert_eq!(ret[i].load(atomic::Ordering::Relaxed), result);
     }
 }
 
@@ -329,7 +329,7 @@ fn run_threadpool_benchmark<F>(f: F)
         .pool_size(ncpu)
         .create()
         .unwrap();
-    if !RAYON_GLOBAL_INIT.swap(true, Ordering::SeqCst) {
+    if !RAYON_GLOBAL_INIT.swap(true, atomic::Ordering::SeqCst) {
         rayon::ThreadPoolBuilder::new()
             .num_threads(ncpu)
             .build_global()
