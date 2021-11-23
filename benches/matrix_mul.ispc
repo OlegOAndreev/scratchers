@@ -99,7 +99,7 @@ export void ispc_matrix_vec_mul_v2(
     }
 }
 
-// Try multiplying several rows by multiple vectors at once.
+// Try multiplying several 4 rows by 4 vectors at once with manual unrolling.
 export void ispc_matrix_vec_mul_v3(
     uniform float src_mat[],
     uniform int src_mat_stride,
