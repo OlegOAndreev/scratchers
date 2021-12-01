@@ -10,40 +10,46 @@ use glam::Vec4;
 pub struct AlignedMatrix {
     storage: Vec<Vec4>,
     // Stride is in Vec4.
-    stride: usize,
-    // width is in f32.
-    width: usize,
-    height: usize,
+    vec4_stride: usize,
+    // num_columns is in f32.
+    num_columns: usize,
+    num_rows: usize,
 }
 
 #[allow(dead_code)]
 impl AlignedMatrix {
-    // Allocates width x height matrix.
+    // Allocates num_columns x num_rows matrix.
     #[inline(always)]
-    pub fn new(width: usize, height: usize) -> Self {
-        let stride = (width + 3) / 4;
+    pub fn new(num_columns: usize, num_rows: usize) -> Self {
+        let vec4_stride = (num_columns + 3) / 4;
         Self {
-            storage: vec![Vec4::ZERO; stride * height],
-            stride,
-            width,
-            height,
+            storage: vec![Vec4::ZERO; vec4_stride * num_rows],
+            vec4_stride,
+            num_columns,
+            num_rows,
         }
     }
 
     #[inline(always)]
-    pub fn width(&self) -> usize {
-        self.width
+    pub fn num_columns(&self) -> usize {
+        self.num_columns
     }
 
     #[inline(always)]
-    pub fn height(&self) -> usize {
-        self.height
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+
+    // Returns stride in bytes.
+    #[inline(always)]
+    pub fn u8_stride(&self) -> usize {
+        self.vec4_stride * 16
     }
 
     // Fills the matrix with value. NOTE: Does not affect the margin.
     #[inline(always)]
     pub fn fill(&mut self, value: f32) {
-        for row in 0..self.height {
+        for row in 0..self.num_rows {
             self.as_f32_mut(row).fill(value);
         }
     }
@@ -51,31 +57,31 @@ impl AlignedMatrix {
     // Returns the row as slice of f32 elements.
     #[inline(always)]
     pub fn as_f32(&self, row_index: usize) -> &[f32] {
-        let row_start = row_index * self.stride * 4;
+        let row_start = row_index * self.vec4_stride * 4;
         let storage: &[f32] = bytemuck::cast_slice(&self.storage[..]);
-        &storage[row_start..row_start + self.width]
+        &storage[row_start..row_start + self.num_columns]
     }
 
     // Returns the row as mutable slice of f32 elements.
     #[inline(always)]
     pub fn as_f32_mut(&mut self, row_index: usize) -> &mut [f32] {
-        let row_start = row_index * self.stride * 4;
+        let row_start = row_index * self.vec4_stride * 4;
         let storage: &mut [f32] = bytemuck::cast_slice_mut(&mut self.storage[..]);
-        &mut storage[row_start..row_start + self.width]
+        &mut storage[row_start..row_start + self.num_columns]
     }
 
     // Returns the row as slice of Vec4 elements.
     #[inline(always)]
     pub fn as_vec4(&self, row_index: usize) -> &[Vec4] {
-        let row_start = row_index * self.stride;
-        &self.storage[row_start..row_start + self.stride]
+        let row_start = row_index * self.vec4_stride;
+        &self.storage[row_start..row_start + self.vec4_stride]
     }
 
     // Returns the row as mutable slice of Vec4 elements.
     #[inline(always)]
     pub fn as_vec4_mut(&mut self, row_index: usize) -> &mut [Vec4] {
-        let row_start = row_index * self.stride;
-        &mut self.storage[row_start..row_start + self.stride]
+        let row_start = row_index * self.vec4_stride;
+        &mut self.storage[row_start..row_start + self.vec4_stride]
     }
 
     // Returns slice of f32 elements from the given row.
@@ -83,7 +89,7 @@ impl AlignedMatrix {
     pub fn as_f32_slice<S>(&self, row_index: usize, bounds: S) -> &[f32]
         where S: RangeBounds<usize>
     {
-        let row_start = row_index * self.stride * 4;
+        let row_start = row_index * self.vec4_stride * 4;
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
             Bound::Excluded(&bound) => bound + 1,
@@ -92,9 +98,10 @@ impl AlignedMatrix {
         let end = match bounds.end_bound() {
             Bound::Included(&bound) => bound + 1,
             Bound::Excluded(&bound) => bound,
-            Bound::Unbounded => self.width,
+            Bound::Unbounded => self.num_columns,
         };
-        assert!(end <= self.width, "Out of bounds slice end: {}, width {}", end, self.width);
+        assert!(end <= self.num_columns, "Out of bounds slice end: {}, num columns {}",
+                end, self.num_columns);
         let storage: &[f32] = bytemuck::cast_slice(&self.storage[..]);
         &storage[row_start + start..row_start + end]
     }
@@ -104,7 +111,7 @@ impl AlignedMatrix {
     pub fn as_f32_slice_mut<S>(&mut self, row_index: usize, bounds: S) -> &mut [f32]
         where S: RangeBounds<usize>
     {
-        let row_start = row_index * self.stride * 4;
+        let row_start = row_index * self.vec4_stride * 4;
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
             Bound::Excluded(&bound) => bound + 1,
@@ -113,9 +120,10 @@ impl AlignedMatrix {
         let end = match bounds.end_bound() {
             Bound::Included(&bound) => bound + 1,
             Bound::Excluded(&bound) => bound,
-            Bound::Unbounded => self.width,
+            Bound::Unbounded => self.num_columns,
         };
-        assert!(end <= self.width, "Out of bounds slice end: {}, width {}", end, self.width);
+        assert!(end <= self.num_columns, "Out of bounds slice end: {}, num columns {}",
+                end, self.num_columns);
         let storage: &mut [f32] = bytemuck::cast_slice_mut(&mut self.storage[..]);
         &mut storage[row_start + start..row_start + end]
     }
@@ -125,7 +133,7 @@ impl AlignedMatrix {
     pub fn as_vec4_slice<S>(&self, row_index: usize, bounds: S) -> &[Vec4]
         where S: RangeBounds<usize>
     {
-        let row_start = row_index * self.stride;
+        let row_start = row_index * self.vec4_stride;
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
             Bound::Excluded(&bound) => bound + 1,
@@ -134,7 +142,7 @@ impl AlignedMatrix {
         let end = match bounds.end_bound() {
             Bound::Included(&bound) => bound + 1,
             Bound::Excluded(&bound) => bound,
-            Bound::Unbounded => self.stride,
+            Bound::Unbounded => self.vec4_stride,
         };
         &self.storage[row_start + start..row_start + end]
     }
@@ -144,7 +152,7 @@ impl AlignedMatrix {
     pub fn as_vec4_slice_mut<S>(&mut self, row_index: usize, bounds: S) -> &mut [Vec4]
         where S: RangeBounds<usize>
     {
-        let row_start = row_index * self.stride;
+        let row_start = row_index * self.vec4_stride;
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
             Bound::Excluded(&bound) => bound + 1,
@@ -153,7 +161,7 @@ impl AlignedMatrix {
         let end = match bounds.end_bound() {
             Bound::Included(&bound) => bound + 1,
             Bound::Excluded(&bound) => bound,
-            Bound::Unbounded => self.stride,
+            Bound::Unbounded => self.vec4_stride,
         };
         &mut self.storage[row_start + start..row_start + end]
     }
@@ -167,6 +175,16 @@ impl AlignedMatrix {
     // Returns mutable slice of f32 elements for all rows. Useful for interacting with external code.
     #[inline(always)]
     pub fn as_f32_whole_mut(&mut self) -> &mut [f32] {
+        bytemuck::cast_slice_mut(&mut self.storage)
+    }
+
+    // Returns slice of u8 elements for all rows. Useful for interacting with external code.
+    pub fn as_u8_whole(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.storage)
+    }
+
+    // Returns mutable slice of u8 elements for all rows. Useful for interacting with external code.
+    pub fn as_u8_whole_mut(&mut self) -> &mut [u8] {
         bytemuck::cast_slice_mut(&mut self.storage)
     }
 }
@@ -210,6 +228,12 @@ impl AlignedVec {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    // Returns number of bytes to store AlignedVec.
+    #[inline(always)]
+    pub fn u8_len(&self) -> usize {
+        self.storage.len() * 16
     }
 
     // Fills the vector with value. NOTE: Does not fill the margin.
@@ -275,7 +299,7 @@ impl AlignedVec {
             Bound::Excluded(&bound) => bound,
             Bound::Unbounded => self.len,
         };
-        assert!(end <= self.len, "Out of bounds slice end: {}, width {}", end, self.len);
+        assert!(end <= self.len, "Out of bounds slice end: {}, len {}", end, self.len);
         let storage: &[f32] = bytemuck::cast_slice(&self.storage[..]);
         &storage[start..end]
     }
@@ -295,7 +319,7 @@ impl AlignedVec {
             Bound::Excluded(&bound) => bound,
             Bound::Unbounded => self.len,
         };
-        assert!(end <= self.len, "Out of bounds slice end: {}, width {}", end, self.len);
+        assert!(end <= self.len, "Out of bounds slice end: {}, len {}", end, self.len);
         let storage: &mut [f32] = bytemuck::cast_slice_mut(&mut self.storage[..]);
         &mut storage[start..end]
     }
@@ -334,6 +358,16 @@ impl AlignedVec {
             Bound::Unbounded => (self.len + 3) / 4,
         };
         &mut self.storage[start..end]
+    }
+
+    // Returns slice of u8 elements. Useful for interacting with external code.
+    pub fn as_u8(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.storage)
+    }
+
+    // Returns mutable slice of u8 elements. Useful for interacting with external code.
+    pub fn as_u8_mut(&mut self) -> &mut [u8] {
+        bytemuck::cast_slice_mut(&mut self.storage)
     }
 }
 
@@ -838,7 +872,7 @@ mod tests {
 
     fn test_row_vec4(m: &AlignedMatrix, r: usize, i: usize, value: Vec4) {
         assert_eq!(m.as_f32_slice(r, i * 4..i * 4 + 1)[0], value.x);
-        if i * 4 + 4 <= m.width() {
+        if i * 4 + 4 <= m.num_columns() {
             assert_eq!(m.as_f32_slice(r, i * 4 + 1..i * 4 + 2)[0], value.y);
             assert_eq!(m.as_f32_slice(r, i * 4 + 2..i * 4 + 3)[0], value.z);
             assert_eq!(m.as_f32_slice(r, i * 4 + 3..i * 4 + 4)[0], value.w);
