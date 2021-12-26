@@ -1,4 +1,4 @@
-use std::{env, fs};
+use std::{env};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,37 +9,7 @@ fn main() -> Result<()> {
     if cfg!(feature = "ispc") {
         compile_ispc()?;
     }
-    validate_wgsl()?;
 
-    Ok(())
-}
-
-fn validate_wgsl() -> Result<()> {
-    let shader_paths = glob::glob("./**/*.wgsl")?;
-
-    for p in shader_paths {
-        let shader_path = p?;
-        let contents = fs::read_to_string(&shader_path)?;
-        match naga::front::wgsl::parse_str(&contents) {
-            Ok(module) => {
-                let info = naga::valid::Validator::new(
-                    naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all(),
-                ).validate(&module);
-                match info {
-                    Ok(_) => {}
-                    Err(error) => {
-                        bail!("{:?}: Validation error: {}", shader_path, error)
-                    }
-                }
-            }
-            Err(error) => {
-                bail!("{:?}: Parse error: {}", shader_path, error.emit_to_string(&contents));
-            }
-        }
-        // TODO: This forces rebuild on each iteration, check out the ways to skip the rebuild
-        // if nothing changed.
-        // println!("cargo:rerun-if-changed={:?}", shader_path);
-    }
     Ok(())
 }
 

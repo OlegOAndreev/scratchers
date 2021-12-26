@@ -3,6 +3,7 @@
 use std::{iter, task, thread};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::ops::{DerefMut, Range};
 use std::pin::Pin;
@@ -24,6 +25,44 @@ use scratchers::aligned_vec::{AlignedMatrix, AlignedVec};
 
 static RAYON_GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
+// Unfortunately, wgpu does not expose semaphores, so we have to manually spin.
+struct GpuSpinner {
+    iteration: usize,
+}
+
+impl GpuSpinner {
+    const SPIN_UNTIL_ITERATION: usize = 10;
+    #[cfg(not(windows))]
+    const YIELD_UNTIL_ITERATION: usize = 20;
+    #[cfg(not(windows))]
+    const SLEEP_FOR: Duration = Duration::from_micros(10);
+    #[cfg(windows)]
+    const YIELD_UNTIL_ITERATION: usize = 2000;
+    #[cfg(windows)]
+    const SLEEP_FOR: Duration = Duration::from_millis(10);
+
+    pub fn new() -> Self {
+        Self {
+            iteration: 0,
+        }
+    }
+
+    pub fn spin(&mut self) {
+        self.iteration += 1;
+        if self.iteration < Self::SPIN_UNTIL_ITERATION {
+            for _ in 0..(self.iteration * self.iteration) {
+                core::hint::spin_loop();
+            }
+        } else if self.iteration < Self::YIELD_UNTIL_ITERATION {
+            for _ in 0..(self.iteration - Self::SPIN_UNTIL_ITERATION + 1) {
+                thread::yield_now();
+            }
+        } else {
+            thread::sleep(Self::SLEEP_FOR);
+        }
+    }
+}
+
 #[allow(dead_code)]
 struct Gpu {
     instance: wgpu::Instance,
@@ -32,8 +71,6 @@ struct Gpu {
 }
 
 impl Gpu {
-    pub const POLL_INTERVAL: Duration = Duration::from_micros(100);
-
     const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
 
     pub fn new(discrete: bool) -> Option<Self> {
@@ -66,8 +103,9 @@ impl Gpu {
         let features = adapter.features() & Self::desired_features();
         match adapter.request_device(
             &wgpu::DeviceDescriptor {
+                label: None,
                 features,
-                ..Default::default()
+                limits: adapter.limits(),
             },
             trace_dir.ok().as_ref().map(std::path::Path::new),
         ).await {
@@ -88,6 +126,7 @@ impl Gpu {
         let start_wait_complete_time = Instant::now();
         let mut fut = self.queue.on_submitted_work_done();
         let mut cx = task::Context::from_waker(futures::task::noop_waker_ref());
+        let mut spinner = GpuSpinner::new();
         'poll: loop {
             match Pin::new(&mut fut).poll(&mut cx) {
                 Poll::Ready(_) => {
@@ -95,7 +134,7 @@ impl Gpu {
                 }
                 Poll::Pending => {
                     self.device.poll(wgpu::Maintain::Poll);
-                    thread::sleep(Gpu::POLL_INTERVAL);
+                    spinner.spin();
                 }
             }
         }
@@ -155,22 +194,30 @@ impl MatrixVecMultiplyInput {
     }
 
     fn store_golden_dst(&mut self) {
-        self.golden_dst_vecs = self.dst_vecs.borrow().clone();
-        self.reset_dst();
+        if !self.golden_dst_vecs.is_empty() {
+            return;
+        }
+        for i in 0..self.src_vecs.len() {
+            let mut dst_vec = AlignedVec::new(self.L);
+            standard_matrix_vec_mul(&self.src_mat, &self.src_vecs[i], &mut dst_vec, 0..self.L);
+            self.golden_dst_vecs.push(dst_vec);
+        }
     }
 
     fn compare_golden_dst(&mut self) {
+        self.store_golden_dst();
         // See vec4_matrix_vec_mul_v2 for comments why the tolerances are higher than epsilon. The
         // amount of sums is self.K, so we use it in the tolerance multiplier.
         let tolerance = self.K as f32 * f32::EPSILON / 4.0;
-        for (golden_dst_vec, dst_vec) in self.golden_dst_vecs.iter()
-            .zip(self.dst_vecs.borrow().iter()) {
+        for (vec_idx, (golden_dst_vec, dst_vec)) in self.golden_dst_vecs.iter()
+            .zip(self.dst_vecs.borrow().iter())
+            .enumerate() {
             assert_eq!(golden_dst_vec.len(), dst_vec.len());
             for (i, (g, d)) in golden_dst_vec.iter().zip(dst_vec.iter()).enumerate() {
                 let diff = (g - d).abs();
                 let max = g.abs().max(d.abs());
                 if diff > f32::EPSILON && diff / max >= tolerance {
-                    assert!(false, "Different values [{}]: {} vs {}", i, g, d);
+                    assert!(false, "Different values in vec #{} [{}]: {} vs {}", vec_idx, i, g, d);
                 }
             }
         }
@@ -178,13 +225,64 @@ impl MatrixVecMultiplyInput {
     }
 }
 
+struct ComputePipelineVariant {
+    // All pipelines must have two invocation ids: (row idx, vec idx) and multiply a fixed number of
+    // rows per fixed number of vecs. Each thread can process one or several rows and one or several
+    // vecs at once.
+    pub pipeline: wgpu::ComputePipeline,
+    pub workgroup_size: (u32, u32),
+    pub per_thread: (u32, u32),
+}
+
 struct MatrixVecGpuPipelines {
     // One bind group layout for all shader variants.
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub pipeline_v1: wgpu::ComputePipeline,
+    pub pipelines: HashMap<String, Vec<ComputePipelineVariant>>,
+    // pipeline_names are the keys of pipelines map in proper order.
+    pub pipeline_names: Vec<String>,
 }
 
 impl MatrixVecGpuPipelines {
+    const SHADER_SRCS: &'static [&'static str] = &[
+        include_str!("shaders/matrix_mul_v1.wgsl"),
+        include_str!("shaders/matrix_mul_v2.wgsl"),
+        include_str!("shaders/matrix_mul_v2_loop8.wgsl"),
+        include_str!("shaders/matrix_mul_v2_loop8_unrolled.wgsl"),
+        include_str!("shaders/matrix_mul_v2_loop8_unrolled_single_accum.wgsl"),
+        include_str!("shaders/matrix_mul_v2_vec4.wgsl"),
+        include_str!("shaders/matrix_mul_v2_vec8.wgsl"),
+        include_str!("shaders/matrix_mul_v3.wgsl"),
+    ];
+    const SHADER_WORKGROUP_SIZES: &'static [&'static [(u32, u32)]] = &[
+        &[(1, 1), (8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+        &[(8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
+    ];
+    const SHADER_PER_THREAD_SIZES: &'static [(u32, u32)] = &[
+        (1, 1),
+        (4, 1),
+        (4, 1),
+        (4, 1),
+        (4, 1),
+        (4, 1),
+        (4, 1),
+        (1, 1),
+    ];
+
+    const SHADER_COMMON_NAMES: &'static [&'static str] = &[
+        "matrix_mul_common.wgsl",
+        "matrix_mul_common_vec4.wgsl",
+    ];
+    const SHADER_COMMON_SRCS: &'static [&'static str] = &[
+        include_str!("shaders/matrix_mul_common.wgsl"),
+        include_str!("shaders/matrix_mul_common_vec4.wgsl"),
+    ];
+
     pub fn new(gpu: &Gpu) -> Self {
         let bind_group_layout = gpu.device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
@@ -244,21 +342,86 @@ impl MatrixVecGpuPipelines {
             push_constant_ranges: &[],
         });
 
-        let matrix_mul_wgsl = include_str!("matrix_mul.wgsl");
+        let sources = Self::prepare_shader_variants();
+        let mut pipelines = HashMap::new();
+        let mut pipeline_names = vec![];
+        for (source, per_thread) in sources {
+            Self::add_pipeline_variants(&source, gpu, &pipeline_layout, &mut pipelines,
+                                        &mut pipeline_names, per_thread);
+        }
 
-        let shader_v1 = gpu.device.create_shader_module(&wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(Cow::from(matrix_mul_wgsl)),
-        });
-        let pipeline_v1 = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: Some(&pipeline_layout),
-            module: &shader_v1,
-            entry_point: "main_v1",
-        });
         Self {
             bind_group_layout,
-            pipeline_v1,
+            pipelines,
+            pipeline_names,
+        }
+    }
+
+    fn prepare_shader_variants() -> Vec<(String, (u32, u32))> {
+        let mut common_sources = liquid::partials::InMemorySource::new();
+        for (&name, &src) in Self::SHADER_COMMON_NAMES.iter().zip(Self::SHADER_COMMON_SRCS) {
+            common_sources.add(name, src);
+        }
+        let partial_compiler = liquid::partials::LazyCompiler::new(common_sources);
+        let parser = liquid::ParserBuilder::with_stdlib()
+            .partials(partial_compiler)
+            .build()
+            .expect("Failed to create parser");
+
+        let mut variants = vec![];
+        for ((&src, &workgroup_sizes), &per_thread) in Self::SHADER_SRCS.iter()
+            .zip(Self::SHADER_WORKGROUP_SIZES)
+            .zip(Self::SHADER_PER_THREAD_SIZES) {
+            for (wg_x, wg_y) in workgroup_sizes {
+                let rendered = parser.parse(src)
+                    .expect("Faild to parse template")
+                    .render(&liquid::object!({
+                        "wg_x": wg_x,
+                        "wg_y": wg_y,
+                        // TODO: Check if naga 0.8 still requires it.
+                        "zero_out": true,
+                    }))
+                    .expect("Failed to render template");
+                log::info!("Got rendered shader: {}", rendered);
+                variants.push((rendered, per_thread));
+            }
+        }
+
+        variants
+    }
+
+    fn add_pipeline_variants(
+        source: &str,
+        gpu: &Gpu,
+        pipeline_layout: &wgpu::PipelineLayout,
+        pipelines: &mut HashMap<String, Vec<ComputePipelineVariant>>,
+        pipeline_names: &mut Vec<String>,
+        per_thread: (u32, u32),
+    ) {
+        let shader = gpu.device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(Cow::from(source)),
+        });
+
+        let parsed_module = naga::front::wgsl::parse_str(source).unwrap();
+        for entry_point in parsed_module.entry_points {
+            let pipeline = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: &entry_point.name,
+            });
+            let workgroup_size = (entry_point.workgroup_size[0], entry_point.workgroup_size[1]);
+            if !pipelines.contains_key(&entry_point.name) {
+                pipeline_names.push(entry_point.name.clone());
+            }
+            let entry = pipelines.entry(entry_point.name.clone())
+                .or_insert(vec![]);
+            entry.push(ComputePipelineVariant {
+                pipeline,
+                workgroup_size,
+                per_thread
+            });
         }
     }
 }
@@ -322,9 +485,13 @@ struct Uniforms {
     // and dst_vecs which is just too much hassle.
     K: u32,
     L: u32,
+    M: u32,
 }
 
 impl MatrixVecMultiplyGpuInput {
+    // Add 16 bytes for the errors counter in front of the buffer.
+    const DST_BUF_HEADER: usize = 16;
+
     fn from(
         gpu: &Gpu,
         pipeline: &MatrixVecGpuPipelines,
@@ -337,6 +504,7 @@ impl MatrixVecMultiplyGpuInput {
         let uniforms = Uniforms {
             K: K as u32,
             L: L as u32,
+            M: input.src_vecs.len() as u32,
         };
         let uniforms_buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -367,7 +535,8 @@ impl MatrixVecMultiplyGpuInput {
             usage: src_usage,
             mapped_at_creation: false,
         });
-        let dst_vecs_size = L * M * 4;
+
+        let dst_vecs_size = L * M * 4 + Self::DST_BUF_HEADER;
         let dst_vecs_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("dst_vecs"),
             size: dst_vecs_size as u64,
@@ -520,7 +689,7 @@ impl MatrixVecMultiplyGpuInput {
     pub fn submit_copy_dst_from_gpu(&self, gpu: &Gpu, stats: &mut GpuStats) {
         if !self.unified_memory {
             // Submit copy dst_vecs_buffer -> staging_buffer.
-            let dst_vecs_size = self.dst_vec_len * self.num_vecs * 4;
+            let dst_vecs_size = self.dst_vec_len * self.num_vecs * 4 + Self::DST_BUF_HEADER as u32;
             let submit_start_time = Instant::now();
             let mut encoder = gpu.device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor::default());
@@ -538,15 +707,17 @@ impl MatrixVecMultiplyGpuInput {
         gpu: &Gpu,
         input: &mut MatrixVecMultiplyInput,
         stats: &mut GpuStats,
-    ) {
+    ) -> i32 {
         if self.unified_memory {
             let start_map_time = Instant::now();
             self.map_buffers(gpu, &[&self.dst_vecs_buffer], wgpu::MapMode::Read);
             stats.map_time += Instant::now() - start_map_time;
 
             let start_copy_time = Instant::now();
-            let mut dst_vecs_data = self.dst_vecs_buffer.slice(..).get_mapped_range_mut();
-            let mut offset = 0;
+            let mut dst_vecs_data = self.dst_vecs_buffer.slice(..)
+                .get_mapped_range_mut();
+            let errors = read_i32(&dst_vecs_data[..]);
+            let mut offset = Self::DST_BUF_HEADER;
             for dst_vec in input.dst_vecs.borrow_mut().iter_mut() {
                 let dst_vec_u8 = dst_vec.as_u8_mut();
                 let dst_vec_size = dst_vec_u8.len();
@@ -559,17 +730,20 @@ impl MatrixVecMultiplyGpuInput {
             drop(dst_vecs_data);
             self.dst_vecs_buffer.unmap();
             stats.unmap_time += Instant::now() - start_unmap_time;
+            errors
         } else {
             // Map the buffer.
             let start_map_time = Instant::now();
             let staging_buffer = self.staging_buffer.as_ref().unwrap();
             self.map_buffers(gpu, &[staging_buffer], wgpu::MapMode::Read);
-            let mut staging_data = staging_buffer.slice(..).get_mapped_range_mut();
+            let mut staging_data = staging_buffer.slice(..)
+                .get_mapped_range_mut();
             stats.map_time += Instant::now() - start_map_time;
 
             // Actually copy the data.
             let start_copy_time = Instant::now();
-            let mut offset = 0;
+            let errors = read_i32(&staging_data[..]);
+            let mut offset = Self::DST_BUF_HEADER;
             for dst_vec in input.dst_vecs.borrow_mut().iter_mut() {
                 let dst_vec_u8 = dst_vec.as_u8_mut();
                 let dst_vec_size = dst_vec_u8.len();
@@ -582,27 +756,8 @@ impl MatrixVecMultiplyGpuInput {
             drop(staging_data);
             staging_buffer.unmap();
             stats.unmap_time = Instant::now() - start_unmap_time;
+            errors
         }
-    }
-
-    pub fn dispatch_main_v1(
-        &self,
-        gpu: &Gpu,
-        pipelines: &MatrixVecGpuPipelines,
-        stats: &mut GpuStats,
-    ) {
-        let submit_start_time = Instant::now();
-        let mut encoder = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&pipelines.pipeline_v1);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.dispatch(self.num_rows, self.num_vecs, 1);
-        }
-        let cmd = encoder.finish();
-        gpu.queue.submit(iter::once(cmd));
-        stats.submit_time += Instant::now() - submit_start_time;
     }
 
     fn map_buffers(&self, gpu: &Gpu, buffers: &[&wgpu::Buffer], map_mode: wgpu::MapMode) {
@@ -610,8 +765,8 @@ impl MatrixVecMultiplyGpuInput {
         let mut futs: Vec<_> = buffers.iter()
             .map(|b| b.slice(..).map_async(map_mode).boxed())
             .collect();
-        // We do not sleep, just poll the device.
         let mut cx = task::Context::from_waker(futures::task::noop_waker_ref());
+        let mut spinner = GpuSpinner::new();
         while !futs.is_empty() {
             futs.retain_mut(|fut| {
                 match Pin::new(fut).poll(&mut cx) {
@@ -622,14 +777,22 @@ impl MatrixVecMultiplyGpuInput {
                     Poll::Pending => false,
                 }
             });
+            if futs.is_empty() {
+                break;
+            }
             gpu.device.poll(wgpu::Maintain::Poll);
-            thread::yield_now();
+            spinner.spin();
         }
         let polled_for = Instant::now() - start_time;
         if polled_for > Duration::from_millis(50) {
             warn!("Waited for buffer mapping for {:?}", polled_for);
         }
     }
+}
+
+fn read_i32(s: &[u8]) -> i32 {
+    let arr: [u8; 4] = [s[0], s[1], s[2], s[3]];
+    i32::from_le_bytes(arr)
 }
 
 // Removes all elements which match the filter from vector. Does not retain the original order.
@@ -1564,34 +1727,104 @@ fn bench_rayon_ispc_matrix_vec_multiply_v3(input: &MatrixVecMultiplyInput) {
         });
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[allow(dead_code)]
-enum WithCopy {
-    None,
-    CopyDst,
-    CopySrcAndDst,
+fn bench_gpu(
+    group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
+    gpu: &Gpu,
+    pipelines: &MatrixVecGpuPipelines,
+    unified_gpu_input: &MatrixVecMultiplyGpuInput,
+    staging_gpu_input: &MatrixVecMultiplyGpuInput,
+    input: &mut MatrixVecMultiplyInput,
+    integrated: bool,
+) {
+    for pipeline_name in &pipelines.pipeline_names {
+        for variant in &pipelines.pipelines[pipeline_name] {
+            bench_gpu_impl(group, gpu, variant, pipeline_name, unified_gpu_input, input,
+                           true, false, integrated);
+            bench_gpu_impl(group, gpu, variant, pipeline_name, staging_gpu_input, input,
+                           false, true, integrated);
+            bench_gpu_impl(group, gpu, variant, pipeline_name, staging_gpu_input, input,
+                           false, false, integrated);
+        }
+    }
 }
 
-fn bench_gpu_v1(
+fn bench_gpu_impl(
+    group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
     gpu: &Gpu,
-    gpu_pipelines: &MatrixVecGpuPipelines,
+    pipeline_variant: &ComputePipelineVariant,
+    pipeline_name: &String,
     gpu_input: &MatrixVecMultiplyGpuInput,
     input: &mut MatrixVecMultiplyInput,
-    with_copy: WithCopy,
+    unified: bool,
+    with_copy: bool,
+    integrated: bool,
+) {
+    let bench_name = format!("{} wg{}x{} gpu {} {} {}",
+                             pipeline_name.replace("main_", ""),
+                             pipeline_variant.workgroup_size.0,
+                             pipeline_variant.workgroup_size.1,
+                             if integrated { "integrated" } else { "discrete" },
+                             if unified { "unified" } else { "staging" },
+                             if with_copy { "with copy" } else { "no copy" });
+    let mut stats = GpuStats::default();
+    group.bench_function(bench_name.clone(), |b| {
+        gpu_input.reset_dst(gpu);
+        b.iter(|| bench_gpu_pipeline(gpu, pipeline_variant, gpu_input, input,
+                                     with_copy, bench_name.as_str(), &mut stats));
+        if !unified && !with_copy {
+            gpu_input.submit_copy_dst_from_gpu(gpu, &mut GpuStats::default());
+        }
+        let errors = gpu_input.copy_dst_from_gpu(gpu, input, &mut GpuStats::default());
+        if errors > 0 {
+            panic!("{} failed with {} errors", bench_name, errors);
+        }
+        input.compare_golden_dst();
+    });
+    if stats.count > 0 {
+        println!("{}: {}", bench_name, stats);
+    }
+}
+
+fn bench_gpu_pipeline(
+    gpu: &Gpu,
+    pipeline_variant: &ComputePipelineVariant,
+    gpu_input: &MatrixVecMultiplyGpuInput,
+    input: &mut MatrixVecMultiplyInput,
+    with_copy: bool,
+    bench_name: &str,
     stats: &mut GpuStats,
 ) {
-    if with_copy == WithCopy::CopySrcAndDst {
+    if with_copy {
         gpu_input.copy_src_to_gpu(gpu, input, stats);
     }
-    gpu_input.dispatch_main_v1(gpu, gpu_pipelines, stats);
-    if with_copy != WithCopy::None {
+
+    let submit_start_time = Instant::now();
+    let mut encoder = gpu.device.create_command_encoder(
+        &wgpu::CommandEncoderDescriptor::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(&pipeline_variant.pipeline);
+        let wg_size = pipeline_variant.workgroup_size;
+        let wg_mult = pipeline_variant.per_thread;
+        let wg_x_num = (gpu_input.num_rows + wg_size.0 * wg_mult.0 - 1) / (wg_size.0 * wg_mult.0);
+        let wg_y_num = (gpu_input.num_vecs + wg_size.1 * wg_mult.1 - 1) / (wg_size.1 * wg_mult.1);
+        pass.set_bind_group(0, &gpu_input.bind_group, &[]);
+        pass.dispatch(wg_x_num, wg_y_num, 1);
+    }
+    let cmd = encoder.finish();
+    gpu.queue.submit(iter::once(cmd));
+    stats.submit_time += Instant::now() - submit_start_time;
+
+    if with_copy {
         gpu_input.submit_copy_dst_from_gpu(gpu, stats);
     }
     gpu.wait_for_submitted_work_done(stats);
-    if with_copy != WithCopy::None {
-        gpu_input.copy_dst_from_gpu(gpu, input, stats);
+    if with_copy {
+        let errors = gpu_input.copy_dst_from_gpu(gpu, input, stats);
+        if errors > 0 {
+            panic!("{} failed with {} errors", bench_name, errors);
+        }
     }
-
     stats.count += 1;
 }
 
@@ -1605,9 +1838,9 @@ fn matrix_vec_multiply(c: &mut Criterion) {
     let discrete_gpu_pipelines = discrete_gpu.as_ref()
         .map(|gpu| MatrixVecGpuPipelines::new(gpu));
 
-    for K in [16usize, 100usize, 128usize, 1000usize, 4000usize] {
-        for L in [10usize, 128usize, 1000usize, 4000usize] {
-            for M in [1usize, 64usize, 500usize] {
+    for K in [16usize, 100usize, 128usize, 1000usize, 4096usize, 8000usize] {
+        for L in [10usize, 128usize, 1000usize, 4096usize, 8000usize] {
+            for M in [1usize, 64usize, 512usize, 1024usize] {
                 let mut group = c.benchmark_group(
                     format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
 
@@ -1616,8 +1849,6 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                     K as u64 * L as u64 * M as u64 * 2));
 
                 let mut input = MatrixVecMultiplyInput::new(K, L, M);
-                bench_single_thread_matrix_vec_multiply(&input);
-                input.store_golden_dst();
 
                 let integrated_unified_gpu_input = integrated_gpu.as_ref().map(|gpu| {
                     MatrixVecMultiplyGpuInput::from(gpu, integrated_gpu_pipelines.as_ref().unwrap(),
@@ -1685,28 +1916,22 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                 });
 
                 if integrated_gpu.is_some() {
-                    run_gpu_bench(
-                        &mut group,
-                        &integrated_gpu,
-                        &integrated_gpu_pipelines,
-                        &integrated_unified_gpu_input,
-                        &integrated_staging_gpu_input,
-                        &mut input,
-                        bench_gpu_v1,
-                        "v1 gpu integrated",
-                    );
+                    bench_gpu(&mut group,
+                              integrated_gpu.as_ref().unwrap(),
+                              &integrated_gpu_pipelines.as_ref().unwrap(),
+                              &integrated_unified_gpu_input.as_ref().unwrap(),
+                              &integrated_staging_gpu_input.as_ref().unwrap(),
+                              &mut input,
+                              true);
                 }
-                if integrated_gpu.is_some() {
-                    run_gpu_bench(
-                        &mut group,
-                        &discrete_gpu,
-                        &discrete_gpu_pipelines,
-                        &discrete_unified_gpu_input,
-                        &discrete_staging_gpu_input,
-                        &mut input,
-                        bench_gpu_v1,
-                        "v1 gpu discrete",
-                    );
+                if discrete_gpu.is_some() {
+                    bench_gpu(&mut group,
+                              discrete_gpu.as_ref().unwrap(),
+                              &discrete_gpu_pipelines.as_ref().unwrap(),
+                              &discrete_unified_gpu_input.as_ref().unwrap(),
+                              &discrete_staging_gpu_input.as_ref().unwrap(),
+                              &mut input,
+                              false);
                 }
 
                 if M > 1 {
@@ -1768,76 +1993,6 @@ fn matrix_vec_multiply(c: &mut Criterion) {
                 group.finish();
             }
         }
-    }
-}
-
-fn run_gpu_bench<F>(
-    group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
-    gpu: &Option<Gpu>,
-    gpu_pipelines: &Option<MatrixVecGpuPipelines>,
-    unified_gpu_input: &Option<MatrixVecMultiplyGpuInput>,
-    staging_gpu_input: &Option<MatrixVecMultiplyGpuInput>,
-    input: &mut MatrixVecMultiplyInput,
-    bench_fn: F,
-    bench_name: &str,
-) where F: Fn(
-    &Gpu,
-    &MatrixVecGpuPipelines,
-    &MatrixVecMultiplyGpuInput,
-    &mut MatrixVecMultiplyInput,
-    WithCopy,
-    &mut GpuStats,
-)
-{
-    let gpu = gpu.as_ref().unwrap();
-    let pipelines = gpu_pipelines.as_ref().unwrap();
-
-    let unified_input = unified_gpu_input.as_ref().unwrap();
-    unified_input.reset_dst(gpu);
-    let mut stats = GpuStats::default();
-    group.bench_function(format!("{} unified with copy", bench_name), |b| {
-        b.iter(|| bench_fn(gpu, pipelines, unified_input, input, WithCopy::CopySrcAndDst,
-                           &mut stats));
-        input.compare_golden_dst();
-    });
-    if stats.count > 0 {
-        println!("{} unified with copy: {}", bench_name, stats);
-    }
-
-    unified_input.reset_dst(gpu);
-    let mut stats = GpuStats::default();
-    group.bench_function(format!("{} unified no copy", bench_name), |b| {
-        b.iter(|| bench_fn(gpu, pipelines, unified_input, input, WithCopy::None, &mut stats));
-        unified_input.submit_copy_dst_from_gpu(gpu, &mut GpuStats::default());
-        unified_input.copy_dst_from_gpu(gpu, input, &mut GpuStats::default());
-        input.compare_golden_dst();
-    });
-    if stats.count > 0 {
-        println!("{} unified no copy: {}", bench_name, stats);
-    }
-
-    let staging_input = staging_gpu_input.as_ref().unwrap();
-    staging_input.reset_dst(gpu);
-    let mut stats = GpuStats::default();
-    group.bench_function(format!("{} staging with copy", bench_name), |b| {
-        b.iter(|| bench_fn(gpu, pipelines, staging_input, input, WithCopy::CopySrcAndDst,
-                           &mut stats));
-        input.compare_golden_dst();
-    });
-    if stats.count > 0 {
-        println!("{} staging with copy: {}", bench_name, stats);
-    }
-
-    staging_input.reset_dst(gpu);
-    let mut stats = GpuStats::default();
-    group.bench_function(format!("{} staging no copy", bench_name), |b| {
-        b.iter(|| bench_fn(gpu, pipelines, staging_input, input, WithCopy::None, &mut stats));
-        staging_input.submit_copy_dst_from_gpu(gpu, &mut GpuStats::default());
-        staging_input.copy_dst_from_gpu(gpu, input, &mut GpuStats::default());
-        input.compare_golden_dst();
-    });
-    if stats.count > 0 {
-        println!("{} staging no copy: {}", bench_name, stats);
     }
 }
 

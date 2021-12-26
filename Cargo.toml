@@ -31,7 +31,9 @@ futures = { version = "^0.3", features = ["thread-pool"] }
 glam = { version = "^0.20", features = ["bytemuck"] }
 hound = "^3.4"
 libc = "^0.2"
+liquid = "^0.23"
 log = "^0.4"
+naga = { version = "0.7", features = ["wgsl-in"] }
 num_cpus = "^1.13"
 oddio = "^0.4"
 parking_lot = "^0.11"
@@ -65,3 +67,5 @@ ispc = []
 [patch.crates-io]
 # Waiting until new release and version bump in rg3d-sound.
 hrtf = { git = "https://github.com/mrDIMAS/hrtf/" }
+
+#wgpu-hal = { path = "vendor/wgpu-hal-0.11.5" }
