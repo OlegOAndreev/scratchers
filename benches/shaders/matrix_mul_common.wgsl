@@ -1,18 +1,15 @@
 // The file actually contains the liquid template, see https://shopify.github.io/liquid/
 
-[[block]]
 struct Uniforms {
     K: u32;
     L: u32;
     M: u32;
 };
 
-[[block]]
 struct F32Array {
     data: array<f32>;
 };
 
-[[block]]
 struct Dst {
     // Right now we only register errors when we spawn too many workgroups.
     errors: atomic<i32>;

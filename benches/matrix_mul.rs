@@ -25,6 +25,9 @@ use scratchers::aligned_vec::{AlignedMatrix, AlignedVec};
 
 static RAYON_GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
+// If false, use fastest CPU function to compute golden results, otherwise use the slowest.
+static USE_STANDARD_MATRIX_VEC_MUL_FOR_GOLDEN: bool = false;
+
 // Unfortunately, wgpu does not expose semaphores, so we have to manually spin.
 struct GpuSpinner {
     iteration: usize,
@@ -197,10 +200,16 @@ impl MatrixVecMultiplyInput {
         if !self.golden_dst_vecs.is_empty() {
             return;
         }
-        for i in 0..self.src_vecs.len() {
-            let mut dst_vec = AlignedVec::new(self.L);
-            standard_matrix_vec_mul(&self.src_mat, &self.src_vecs[i], &mut dst_vec, 0..self.L);
-            self.golden_dst_vecs.push(dst_vec);
+        for _ in 0..self.src_vecs.len() {
+            self.golden_dst_vecs.push(AlignedVec::new(self.L));
+        }
+        if USE_STANDARD_MATRIX_VEC_MUL_FOR_GOLDEN {
+            for i in 0..self.src_vecs.len() {
+                standard_matrix_vec_mul(&self.src_mat, &self.src_vecs[i],
+                                        &mut self.golden_dst_vecs[i], 0..self.L);
+            }
+        } else {
+            vec4_matrix_vec_mul_v4::<4>(&self.src_mat, &self.src_vecs, &mut self.golden_dst_vecs);
         }
     }
 
@@ -232,6 +241,7 @@ struct ComputePipelineVariant {
     pub pipeline: wgpu::ComputePipeline,
     pub workgroup_size: (u32, u32),
     pub per_thread: (u32, u32),
+    pub required_alignment: (u32, u32),
 }
 
 struct MatrixVecGpuPipelines {
@@ -242,45 +252,76 @@ struct MatrixVecGpuPipelines {
     pub pipeline_names: Vec<String>,
 }
 
+struct MatrixVecGpuShaderSrc {
+    source: &'static str,
+    workgroup_sizes: &'static [(u32, u32)],
+    // Amount of (rows, vecs) processed per thread.
+    per_thread: (u32, u32),
+    // Number of rows and number of vecs must be divisible by the alignment.
+    required_alignment: (u32, u32),
+}
+
 impl MatrixVecGpuPipelines {
-    const SHADER_SRCS: &'static [&'static str] = &[
-        include_str!("shaders/matrix_mul_v1.wgsl"),
-        include_str!("shaders/matrix_mul_v2.wgsl"),
-        include_str!("shaders/matrix_mul_v2_loop8.wgsl"),
-        include_str!("shaders/matrix_mul_v2_loop8_unrolled.wgsl"),
-        include_str!("shaders/matrix_mul_v2_loop8_unrolled_single_accum.wgsl"),
-        include_str!("shaders/matrix_mul_v2_vec4.wgsl"),
-        include_str!("shaders/matrix_mul_v2_vec8.wgsl"),
-        include_str!("shaders/matrix_mul_v3.wgsl"),
-    ];
-    const SHADER_WORKGROUP_SIZES: &'static [&'static [(u32, u32)]] = &[
-        &[(1, 1), (8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
-        &[(8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
-    ];
-    const SHADER_PER_THREAD_SIZES: &'static [(u32, u32)] = &[
-        (1, 1),
-        (4, 1),
-        (4, 1),
-        (4, 1),
-        (4, 1),
-        (4, 1),
-        (4, 1),
-        (1, 1),
+    const SHADER_SRCS: &'static [MatrixVecGpuShaderSrc] = &[
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v1.wgsl"),
+            workgroup_sizes: &[(1, 1), (8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
+            per_thread: (1, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_loop8.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_loop8_unrolled.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_loop8_unrolled_single_accum.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_vec4.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_vec8.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (1, 1),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v2_vec8_aligned.wgsl"),
+            workgroup_sizes: &[(2, 4), (2, 8), (4, 4), (4, 8), (8, 8), (4, 16), (8, 16)],
+            per_thread: (4, 1),
+            required_alignment: (8, 4),
+        },
+        MatrixVecGpuShaderSrc {
+            source: include_str!("shaders/matrix_mul_v3.wgsl"),
+            workgroup_sizes: &[(8, 8), (16, 16), (32, 32), (8, 32), (32, 8)],
+            per_thread: (1, 1),
+            required_alignment: (1, 1),
+        },
     ];
 
-    const SHADER_COMMON_NAMES: &'static [&'static str] = &[
-        "matrix_mul_common.wgsl",
-        "matrix_mul_common_vec4.wgsl",
-    ];
-    const SHADER_COMMON_SRCS: &'static [&'static str] = &[
-        include_str!("shaders/matrix_mul_common.wgsl"),
-        include_str!("shaders/matrix_mul_common_vec4.wgsl"),
+    const SHADER_COMMON_SRCS: &'static [(&'static str, &'static str)] = &[
+        ("matrix_mul_common.wgsl", include_str!("shaders/matrix_mul_common.wgsl")),
+        ("matrix_mul_common_vec4.wgsl", include_str!("shaders/matrix_mul_common_vec4.wgsl")),
     ];
 
     pub fn new(gpu: &Gpu) -> Self {
@@ -345,9 +386,9 @@ impl MatrixVecGpuPipelines {
         let sources = Self::prepare_shader_variants();
         let mut pipelines = HashMap::new();
         let mut pipeline_names = vec![];
-        for (source, per_thread) in sources {
+        for (source, per_thread, required_alignment) in sources {
             Self::add_pipeline_variants(&source, gpu, &pipeline_layout, &mut pipelines,
-                                        &mut pipeline_names, per_thread);
+                                        &mut pipeline_names, per_thread, required_alignment);
         }
 
         Self {
@@ -357,10 +398,10 @@ impl MatrixVecGpuPipelines {
         }
     }
 
-    fn prepare_shader_variants() -> Vec<(String, (u32, u32))> {
+    fn prepare_shader_variants() -> Vec<(String, (u32, u32), (u32, u32))> {
         let mut common_sources = liquid::partials::InMemorySource::new();
-        for (&name, &src) in Self::SHADER_COMMON_NAMES.iter().zip(Self::SHADER_COMMON_SRCS) {
-            common_sources.add(name, src);
+        for (name, src) in Self::SHADER_COMMON_SRCS.iter() {
+            common_sources.add(*name, *src);
         }
         let partial_compiler = liquid::partials::LazyCompiler::new(common_sources);
         let parser = liquid::ParserBuilder::with_stdlib()
@@ -369,21 +410,19 @@ impl MatrixVecGpuPipelines {
             .expect("Failed to create parser");
 
         let mut variants = vec![];
-        for ((&src, &workgroup_sizes), &per_thread) in Self::SHADER_SRCS.iter()
-            .zip(Self::SHADER_WORKGROUP_SIZES)
-            .zip(Self::SHADER_PER_THREAD_SIZES) {
-            for (wg_x, wg_y) in workgroup_sizes {
-                let rendered = parser.parse(src)
+        for src in Self::SHADER_SRCS.iter() {
+            for (wg_x, wg_y) in src.workgroup_sizes {
+                let rendered = parser.parse(src.source)
                     .expect("Faild to parse template")
                     .render(&liquid::object!({
                         "wg_x": wg_x,
                         "wg_y": wg_y,
-                        // TODO: Check if naga 0.8 still requires it.
+                        // TODO: Check if naga 0.9 still requires it.
                         "zero_out": true,
                     }))
                     .expect("Failed to render template");
                 log::info!("Got rendered shader: {}", rendered);
-                variants.push((rendered, per_thread));
+                variants.push((rendered, src.per_thread, src.required_alignment));
             }
         }
 
@@ -397,6 +436,7 @@ impl MatrixVecGpuPipelines {
         pipelines: &mut HashMap<String, Vec<ComputePipelineVariant>>,
         pipeline_names: &mut Vec<String>,
         per_thread: (u32, u32),
+        required_alignment: (u32, u32),
     ) {
         let shader = gpu.device.create_shader_module(&wgpu::ShaderModuleDescriptor {
             label: None,
@@ -420,7 +460,8 @@ impl MatrixVecGpuPipelines {
             entry.push(ComputePipelineVariant {
                 pipeline,
                 workgroup_size,
-                per_thread
+                per_thread,
+                required_alignment,
             });
         }
     }
@@ -1759,6 +1800,14 @@ fn bench_gpu_impl(
     with_copy: bool,
     integrated: bool,
 ) {
+    let alignment = pipeline_variant.required_alignment;
+    if input.K as u32 % alignment.0 != 0 {
+        return;
+    }
+    if input.src_vecs.len() as u32 % alignment.1 != 0 {
+        return;
+    }
+
     let bench_name = format!("{} wg{}x{} gpu {} {} {}",
                              pipeline_name.replace("main_", ""),
                              pipeline_variant.workgroup_size.0,
@@ -1769,8 +1818,10 @@ fn bench_gpu_impl(
     let mut stats = GpuStats::default();
     group.bench_function(bench_name.clone(), |b| {
         gpu_input.reset_dst(gpu);
-        b.iter(|| bench_gpu_pipeline(gpu, pipeline_variant, gpu_input, input,
-                                     with_copy, bench_name.as_str(), &mut stats));
+        b.iter(|| {
+            bench_gpu_pipeline(gpu, pipeline_variant, gpu_input, input,
+                               with_copy, bench_name.as_str(), &mut stats);
+        });
         if !unified && !with_copy {
             gpu_input.submit_copy_dst_from_gpu(gpu, &mut GpuStats::default());
         }
@@ -1838,160 +1889,164 @@ fn matrix_vec_multiply(c: &mut Criterion) {
     let discrete_gpu_pipelines = discrete_gpu.as_ref()
         .map(|gpu| MatrixVecGpuPipelines::new(gpu));
 
-    for K in [16usize, 100usize, 128usize, 1000usize, 4096usize, 8000usize] {
-        for L in [10usize, 128usize, 1000usize, 4096usize, 8000usize] {
-            for M in [1usize, 64usize, 512usize, 1024usize] {
-                let mut group = c.benchmark_group(
-                    format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
+    for (K, L) in [(16, 10), (100, 10), (128, 128), (1000, 1000), (4000, 4000), (4096, 4096),
+        (8000, 8000), (16000, 16000)] {
+        for M in [1usize, 64usize, 512usize, 1024usize] {
+            let mut group = c.benchmark_group(
+                format!("matrix_vec_multiply/size {}x{}, {} vecs", K, L, M));
 
-                // Compute ~throughput in Gflops.
-                group.throughput(criterion::Throughput::Elements(
-                    K as u64 * L as u64 * M as u64 * 2));
+            // Compute ~throughput in Gflops.
+            group.throughput(criterion::Throughput::Elements(
+                K as u64 * L as u64 * M as u64 * 2));
 
-                let mut input = MatrixVecMultiplyInput::new(K, L, M);
-
-                let integrated_unified_gpu_input = integrated_gpu.as_ref().map(|gpu| {
-                    MatrixVecMultiplyGpuInput::from(gpu, integrated_gpu_pipelines.as_ref().unwrap(),
-                                                    &input, true)
-                });
-                let integrated_staging_gpu_input = integrated_gpu.as_ref().map(|gpu| {
-                    MatrixVecMultiplyGpuInput::from(gpu, integrated_gpu_pipelines.as_ref().unwrap(),
-                                                    &input, false)
-                });
-                let discrete_unified_gpu_input = discrete_gpu.as_ref().map(|gpu| {
-                    MatrixVecMultiplyGpuInput::from(gpu, discrete_gpu_pipelines.as_ref().unwrap(),
-                                                    &input, true)
-                });
-                let discrete_staging_gpu_input = discrete_gpu.as_ref().map(|gpu| {
-                    MatrixVecMultiplyGpuInput::from(gpu, discrete_gpu_pipelines.as_ref().unwrap(),
-                                                    &input, false)
-                });
-
-                group.bench_function("single thread", |b| {
-                    b.iter(|| bench_single_thread_matrix_vec_multiply(&input));
-                    input.compare_golden_dst();
-                });
-
-                group.bench_function("vec4 single thread", |b| {
-                    b.iter(|| bench_vec4_matrix_vec_multiply(&input));
-                    input.compare_golden_dst();
-                });
-
-                group.bench_function("v2 vec4 single thread", |b| {
-                    b.iter(|| bench_vec4_matrix_vec_multiply_v2(&input));
-                    input.compare_golden_dst();
-                });
-
-                group.bench_function("v3 vec4 single thread", |b| {
-                    b.iter(|| bench_vec4_matrix_vec_multiply_v3(&input));
-                    input.compare_golden_dst();
-                });
-
-                group.bench_function("v4 vec4 x4 single thread", |b| {
-                    b.iter(|| bench_vec4_matrix_vec_multiply_v4::<4>(&input));
-                    input.compare_golden_dst();
-                });
-
-                group.bench_function("v4 vec4 x16 single thread", |b| {
-                    b.iter(|| bench_vec4_matrix_vec_multiply_v4::<16>(&input));
-                    input.compare_golden_dst();
-                });
-
-                #[cfg(feature = "ispc")]
-                    group.bench_function("v1 ispc single thread", |b| {
-                    b.iter(|| bench_ispc_matrix_vec_multiply_v1(&input));
-                    input.compare_golden_dst();
-                });
-
-                #[cfg(feature = "ispc")]
-                    group.bench_function("v2 ispc single thread", |b| {
-                    b.iter(|| bench_ispc_matrix_vec_multiply_v2(&input));
-                    input.compare_golden_dst();
-                });
-
-                #[cfg(feature = "ispc")]
-                    group.bench_function("v3 ispc single thread", |b| {
-                    b.iter(|| bench_ispc_matrix_vec_multiply_v3(&input));
-                    input.compare_golden_dst();
-                });
-
-                if integrated_gpu.is_some() {
-                    bench_gpu(&mut group,
-                              integrated_gpu.as_ref().unwrap(),
-                              &integrated_gpu_pipelines.as_ref().unwrap(),
-                              &integrated_unified_gpu_input.as_ref().unwrap(),
-                              &integrated_staging_gpu_input.as_ref().unwrap(),
-                              &mut input,
-                              true);
-                }
-                if discrete_gpu.is_some() {
-                    bench_gpu(&mut group,
-                              discrete_gpu.as_ref().unwrap(),
-                              &discrete_gpu_pipelines.as_ref().unwrap(),
-                              &discrete_unified_gpu_input.as_ref().unwrap(),
-                              &discrete_staging_gpu_input.as_ref().unwrap(),
-                              &mut input,
-                              false);
-                }
-
-                if M > 1 {
-                    group.bench_function(format!("{} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_matrix_vec_multiply(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    group.bench_function(format!("vec4 {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    group.bench_function(format!("v2 vec4 {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v2(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    group.bench_function(format!("v3 vec4 {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v3(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    group.bench_function(format!("v4 vec4 x4 {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v4::<4>(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    group.bench_function(format!("v4 vec4 x16 {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v4::<16>(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    #[cfg(feature = "ispc")]
-                        group.bench_function("v1 ispc launch", |b| {
-                        b.iter(|| bench_ispc_matrix_vec_multiply_v1_launch(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    #[cfg(feature = "ispc")]
-                        group.bench_function(format!("v1 ispc {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v1(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    #[cfg(feature = "ispc")]
-                        group.bench_function(format!("v2 ispc {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v2(&input));
-                        input.compare_golden_dst();
-                    });
-
-                    #[cfg(feature = "ispc")]
-                        group.bench_function(format!("v3 ispc {} threads", ncpu), |b| {
-                        b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v3(&input));
-                        input.compare_golden_dst();
-                    });
-                }
-
-                group.finish();
+            if K * L * M >= 10000000 {
+                group.sample_size(10);
+                group.warm_up_time(Duration::from_nanos(1));
             }
+
+            let mut input = MatrixVecMultiplyInput::new(K, L, M);
+
+            let integrated_unified_gpu_input = integrated_gpu.as_ref().map(|gpu| {
+                MatrixVecMultiplyGpuInput::from(gpu, integrated_gpu_pipelines.as_ref().unwrap(),
+                                                &input, true)
+            });
+            let integrated_staging_gpu_input = integrated_gpu.as_ref().map(|gpu| {
+                MatrixVecMultiplyGpuInput::from(gpu, integrated_gpu_pipelines.as_ref().unwrap(),
+                                                &input, false)
+            });
+            let discrete_unified_gpu_input = discrete_gpu.as_ref().map(|gpu| {
+                MatrixVecMultiplyGpuInput::from(gpu, discrete_gpu_pipelines.as_ref().unwrap(),
+                                                &input, true)
+            });
+            let discrete_staging_gpu_input = discrete_gpu.as_ref().map(|gpu| {
+                MatrixVecMultiplyGpuInput::from(gpu, discrete_gpu_pipelines.as_ref().unwrap(),
+                                                &input, false)
+            });
+
+            group.bench_function("single thread", |b| {
+                b.iter(|| bench_single_thread_matrix_vec_multiply(&input));
+                input.compare_golden_dst();
+            });
+
+            group.bench_function("vec4 single thread", |b| {
+                b.iter(|| bench_vec4_matrix_vec_multiply(&input));
+                input.compare_golden_dst();
+            });
+
+            group.bench_function("v2 vec4 single thread", |b| {
+                b.iter(|| bench_vec4_matrix_vec_multiply_v2(&input));
+                input.compare_golden_dst();
+            });
+
+            group.bench_function("v3 vec4 single thread", |b| {
+                b.iter(|| bench_vec4_matrix_vec_multiply_v3(&input));
+                input.compare_golden_dst();
+            });
+
+            group.bench_function("v4 vec4 x4 single thread", |b| {
+                b.iter(|| bench_vec4_matrix_vec_multiply_v4::<4>(&input));
+                input.compare_golden_dst();
+            });
+
+            group.bench_function("v4 vec4 x16 single thread", |b| {
+                b.iter(|| bench_vec4_matrix_vec_multiply_v4::<16>(&input));
+                input.compare_golden_dst();
+            });
+
+            #[cfg(feature = "ispc")]
+                group.bench_function("v1 ispc single thread", |b| {
+                b.iter(|| bench_ispc_matrix_vec_multiply_v1(&input));
+                input.compare_golden_dst();
+            });
+
+            #[cfg(feature = "ispc")]
+                group.bench_function("v2 ispc single thread", |b| {
+                b.iter(|| bench_ispc_matrix_vec_multiply_v2(&input));
+                input.compare_golden_dst();
+            });
+
+            #[cfg(feature = "ispc")]
+                group.bench_function("v3 ispc single thread", |b| {
+                b.iter(|| bench_ispc_matrix_vec_multiply_v3(&input));
+                input.compare_golden_dst();
+            });
+
+            if integrated_gpu.is_some() {
+                bench_gpu(&mut group,
+                          integrated_gpu.as_ref().unwrap(),
+                          &integrated_gpu_pipelines.as_ref().unwrap(),
+                          &integrated_unified_gpu_input.as_ref().unwrap(),
+                          &integrated_staging_gpu_input.as_ref().unwrap(),
+                          &mut input,
+                          true);
+            }
+            if discrete_gpu.is_some() {
+                bench_gpu(&mut group,
+                          discrete_gpu.as_ref().unwrap(),
+                          &discrete_gpu_pipelines.as_ref().unwrap(),
+                          &discrete_unified_gpu_input.as_ref().unwrap(),
+                          &discrete_staging_gpu_input.as_ref().unwrap(),
+                          &mut input,
+                          false);
+            }
+
+            if M > 1 {
+                group.bench_function(format!("{} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_matrix_vec_multiply(&input));
+                    input.compare_golden_dst();
+                });
+
+                group.bench_function(format!("vec4 {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_vec4_matrix_vec_multiply(&input));
+                    input.compare_golden_dst();
+                });
+
+                group.bench_function(format!("v2 vec4 {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v2(&input));
+                    input.compare_golden_dst();
+                });
+
+                group.bench_function(format!("v3 vec4 {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v3(&input));
+                    input.compare_golden_dst();
+                });
+
+                group.bench_function(format!("v4 vec4 x4 {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v4::<4>(&input));
+                    input.compare_golden_dst();
+                });
+
+                group.bench_function(format!("v4 vec4 x16 {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_vec4_matrix_vec_multiply_v4::<16>(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function("v1 ispc launch", |b| {
+                    b.iter(|| bench_ispc_matrix_vec_multiply_v1_launch(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function(format!("v1 ispc {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v1(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function(format!("v2 ispc {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v2(&input));
+                    input.compare_golden_dst();
+                });
+
+                #[cfg(feature = "ispc")]
+                    group.bench_function(format!("v3 ispc {} threads", ncpu), |b| {
+                    b.iter(|| bench_rayon_ispc_matrix_vec_multiply_v3(&input));
+                    input.compare_golden_dst();
+                });
+            }
+
+            group.finish();
         }
     }
 }

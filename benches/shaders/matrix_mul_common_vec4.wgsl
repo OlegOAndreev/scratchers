@@ -3,19 +3,16 @@
 type Vec4 = vec4<f32>;
 type Mat4 = mat4x4<f32>;
 
-[[block]]
 struct Uniforms {
     K: u32;
     L: u32;
     M: u32;
 };
 
-[[block]]
 struct Vec4Array {
     data: array<Vec4>;
 };
 
-[[block]]
 struct Dst {
     // Right now we only register errors when we spawn too many workgroups.
     errors: atomic<i32>;
