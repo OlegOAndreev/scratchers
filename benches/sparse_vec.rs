@@ -272,7 +272,19 @@ fn bench_sparse<T, I>(input: &SparseInput<T, I>) -> T
             let mut sidx1 = vec1[idx1].0;
             let mut sidx2 = vec2[idx2].0;
             loop {
-                if sidx1 == sidx2 {
+                if sidx1 < sidx2 {
+                    idx1 += 1;
+                    if idx1 == l1 {
+                        break;
+                    }
+                    sidx1 = vec1[idx1].0;
+                } else if sidx1 > sidx2 {
+                    idx2 += 1;
+                    if idx2 == l2 {
+                        break;
+                    }
+                    sidx2 = vec2[idx2].0;
+                } else {
                     a += vec1[idx1].1 * vec2[idx2].1;
                     idx1 += 1;
                     idx2 += 1;
@@ -280,18 +292,6 @@ fn bench_sparse<T, I>(input: &SparseInput<T, I>) -> T
                         break;
                     }
                     sidx1 = vec1[idx1].0;
-                    sidx2 = vec2[idx2].0;
-                } else if sidx1 < sidx2 {
-                    idx1 += 1;
-                    if idx1 == l1 {
-                        break;
-                    }
-                    sidx1 = vec1[idx1].0;
-                } else {
-                    idx2 += 1;
-                    if idx2 == l2 {
-                        break;
-                    }
                     sidx2 = vec2[idx2].0;
                 }
             }
@@ -328,7 +328,19 @@ fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
                 let mut sidx1 = vec1.get_unchecked(idx1).0;
                 let mut sidx2 = vec2.get_unchecked(idx2).0;
                 loop {
-                    if sidx1 == sidx2 {
+                    if sidx1 < sidx2 {
+                        idx1 += 1;
+                        if idx1 == l1 {
+                            break;
+                        }
+                        sidx1 = vec1.get_unchecked(idx1).0;
+                    } else if sidx1 > sidx2 {
+                        idx2 += 1;
+                        if idx2 == l2 {
+                            break;
+                        }
+                        sidx2 = vec2.get_unchecked(idx2).0;
+                    } else {
                         a += vec1.get_unchecked(idx1).1 * vec2.get_unchecked(idx2).1;
                         idx1 += 1;
                         idx2 += 1;
@@ -336,18 +348,6 @@ fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
                             break;
                         }
                         sidx1 = vec1.get_unchecked(idx1).0;
-                        sidx2 = vec2.get_unchecked(idx2).0;
-                    } else if sidx1 < sidx2 {
-                        idx1 += 1;
-                        if idx1 == l1 {
-                            break;
-                        }
-                        sidx1 = vec1.get_unchecked(idx1).0;
-                    } else {
-                        idx2 += 1;
-                        if idx2 == l2 {
-                            break;
-                        }
                         sidx2 = vec2.get_unchecked(idx2).0;
                     }
                 }
@@ -412,7 +412,19 @@ fn bench_sparse_soa<T, I>(input: &SparseInputSoa<T, I>) -> T
             let mut sidx1 = indices1[idx1];
             let mut sidx2 = indices2[idx2];
             loop {
-                if sidx1 == sidx2 {
+                if sidx1 < sidx2 {
+                    idx1 += 1;
+                    if idx1 == l1 {
+                        break;
+                    }
+                    sidx1 = indices1[idx1];
+                } else if sidx1 > sidx2 {
+                    idx2 += 1;
+                    if idx2 == l2 {
+                        break;
+                    }
+                    sidx2 = indices2[idx2];
+                } else {
                     a += values1[idx1] * values2[idx2];
                     idx1 += 1;
                     idx2 += 1;
@@ -420,18 +432,6 @@ fn bench_sparse_soa<T, I>(input: &SparseInputSoa<T, I>) -> T
                         break;
                     }
                     sidx1 = indices1[idx1];
-                    sidx2 = indices2[idx2];
-                } else if sidx1 < sidx2 {
-                    idx1 += 1;
-                    if idx1 == l1 {
-                        break;
-                    }
-                    sidx1 = indices1[idx1];
-                } else {
-                    idx2 += 1;
-                    if idx2 == l2 {
-                        break;
-                    }
                     sidx2 = indices2[idx2];
                 }
             }
@@ -468,7 +468,19 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
                 let mut sidx1 = indices1.get_unchecked(idx1);
                 let mut sidx2 = indices2.get_unchecked(idx2);
                 loop {
-                    if sidx1 == sidx2 {
+                    if sidx1 < sidx2 {
+                        idx1 += 1;
+                        if idx1 == l1 {
+                            break;
+                        }
+                        sidx1 = indices1.get_unchecked(idx1);
+                    } else if sidx1 > sidx2 {
+                        idx2 += 1;
+                        if idx2 == l2 {
+                            break;
+                        }
+                        sidx2 = indices2.get_unchecked(idx2);
+                    } else {
                         a += *values1.get_unchecked(idx1) * *values2.get_unchecked(idx2);
                         idx1 += 1;
                         idx2 += 1;
@@ -476,18 +488,6 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
                             break;
                         }
                         sidx1 = indices1.get_unchecked(idx1);
-                        sidx2 = indices2.get_unchecked(idx2);
-                    } else if sidx1 < sidx2 {
-                        idx1 += 1;
-                        if idx1 == l1 {
-                            break;
-                        }
-                        sidx1 = indices1.get_unchecked(idx1);
-                    } else {
-                        idx2 += 1;
-                        if idx2 == l2 {
-                            break;
-                        }
                         sidx2 = indices2.get_unchecked(idx2);
                     }
                 }
@@ -606,11 +606,11 @@ criterion_group!(sparse_vec_benches, sparse_vec_f32_benchmark, sparse_vec_f64_be
 criterion_main!(sparse_vec_benches);
 
 // fn main() {
-//     let data = generate_exp_vec::<f32>(10000, 500);
-//     let input = prepare_sparse_input::<f32, u32>(&data);
+//     let data = generate_uniform_vec::<f32>(10000, 0.01, 50);
+//     let input = prepare_sparse_input_soa::<f32, u32>(&data);
 //     let start = std::time::Instant::now();
 //     for _ in 0..10000 {
-//         criterion::black_box(bench_sparse_unsafe(&input));
+//         criterion::black_box(bench_sparse_soa_unsafe(&input));
 //     }
 //     println!("Got {:?}", std::time::Instant::now() - start);
 // }
