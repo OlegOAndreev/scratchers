@@ -65,7 +65,7 @@ fn make_rodio_source(data: &Arc<[u8]>) -> Box<RodioSource> {
         .pausable(false)
         .amplify(1.0)
         .stoppable()
-        // Added because both rg3d-sound and soloud support changing the speed.
+        // Added because both fyrox-sound and soloud support changing the speed.
         .speed(1.0)
         .convert_samples::<f32>();
     Box::new(rodio::source::Spatial::new(
@@ -97,52 +97,52 @@ fn bench_play_rodio(mut input: BenchRodioInput) {
     debug_write_to_file("rodio", input.mixer.mixer.sample_rate(), &input.out);
 }
 
-// rg3d-sound.
+// fyrox-sound.
 
-struct BenchRg3dInput<R: rubato::Resampler<f32>> {
+struct BenchFyroxInput<R: rubato::Resampler<f32>> {
     rate: i32,
-    engine: Arc<Mutex<rg3d_sound::engine::SoundEngine>>,
-    context: rg3d_sound::context::SoundContext,
-    buffers: Vec<rg3d_sound::buffer::SoundBufferResource>,
+    engine: Arc<Mutex<fyrox_sound::engine::SoundEngine>>,
+    context: fyrox_sound::context::SoundContext,
+    buffers: Vec<fyrox_sound::buffer::SoundBufferResource>,
     num_srcs: usize,
     out_resampler: R,
     out: Vec<(f32, f32)>,
 }
 
-fn prepare_rg3d_input_fft(
+fn prepare_fyrox_input_fft(
     rate: i32,
     src_data: Vec<&[u8]>,
     num_srcs: usize,
     with_hrtf: bool,
-) -> BenchRg3dInput<rubato::FftFixedOut<f32>> {
-    let engine = rg3d_sound::engine::SoundEngine::without_device();
-    let context = rg3d_sound::context::SoundContext::new();
+) -> BenchFyroxInput<rubato::FftFixedOut<f32>> {
+    let engine = fyrox_sound::engine::SoundEngine::without_device();
+    let context = fyrox_sound::context::SoundContext::new();
     engine.lock().unwrap().add_context(context.clone());
     let buffers: Vec<_> = src_data.iter()
         .map(|d| {
-            rg3d_sound::buffer::SoundBufferResource::new_generic(
-                rg3d_sound::buffer::DataSource::from_memory(d.to_vec()))
+            fyrox_sound::buffer::SoundBufferResource::new_generic(
+                fyrox_sound::buffer::DataSource::from_memory(d.to_vec()))
                 .unwrap()
         })
         .collect();
     if with_hrtf {
-        let hrir_sphere = rg3d_sound::hrtf::HrirSphere::from_file(
+        let hrir_sphere = fyrox_sound::hrtf::HrirSphere::from_file(
             "benches/data/IRC_1002_C.bin",
-            rg3d_sound::context::SAMPLE_RATE,
+            fyrox_sound::context::SAMPLE_RATE,
         ).unwrap();
-        context.state().set_renderer(rg3d_sound::renderer::Renderer::HrtfRenderer(
-            rg3d_sound::renderer::hrtf::HrtfRenderer::new(hrir_sphere)
+        context.state().set_renderer(fyrox_sound::renderer::Renderer::HrtfRenderer(
+            fyrox_sound::renderer::hrtf::HrtfRenderer::new(hrir_sphere)
         ));
     }
 
     let out = vec![(0.0f32, 0.0f32); (MIX_INTERVAL * rate) as usize];
     let out_resampler = rubato::FftFixedOut::<f32>::new(
-        rg3d_sound::context::SAMPLE_RATE as usize,
+        fyrox_sound::context::SAMPLE_RATE as usize,
         rate as usize,
         BUF_SIZE,
         1,
         2);
-    BenchRg3dInput {
+    BenchFyroxInput {
         rate,
         engine,
         context,
@@ -153,24 +153,24 @@ fn prepare_rg3d_input_fft(
     }
 }
 
-// rg3d-sound requires the render() to be called with a specific buffer size
-// (rg3d_sound::engine::SoundEngine::render_buffer_len()) while we need to produce chunks
-// of different size. Rg3dHrtfReader allows rendering into buffers of any size.
-struct Rg3dHrtfReader {
+// fyrox-sound requires the render() to be called with a specific buffer size
+// (fyrox_sound::engine::SoundEngine::render_buffer_len()) while we need to produce chunks
+// of different size. fyroxHrtfReader allows rendering into buffers of any size.
+struct FyroxHrtfReader {
     chunk: Vec<(f32, f32)>,
     pos: usize,
 }
 
-impl Rg3dHrtfReader {
+impl FyroxHrtfReader {
     fn new() -> Self {
-        let chunk_size = rg3d_sound::engine::SoundEngine::render_buffer_len();
+        let chunk_size = fyrox_sound::engine::SoundEngine::render_buffer_len();
         Self {
             chunk: vec![(0.0, 0.0); chunk_size],
             pos: chunk_size,
         }
     }
 
-    fn render(&mut self, engine: &mut rg3d_sound::engine::SoundEngine, buf: &mut [(f32, f32)]) {
+    fn render(&mut self, engine: &mut fyrox_sound::engine::SoundEngine, buf: &mut [(f32, f32)]) {
         let mut buf_pos = 0;
         loop {
             let buf_remaining = buf.len() - buf_pos;
@@ -188,26 +188,24 @@ impl Rg3dHrtfReader {
     }
 }
 
-fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>, with_hrtf: bool) {
+fn bench_play_fyrox<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>, with_hrtf: bool) {
     for i in 0..input.num_srcs {
-        let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
+        let src = fyrox_sound::source::SoundSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
-            .with_status(rg3d_sound::source::Status::Playing)
+            .with_status(fyrox_sound::source::Status::Playing)
+            .with_position([0.1, 0.0, 0.0].into())
             .build()
             .unwrap();
-        let spatial_src = rg3d_sound::source::spatial::SpatialSourceBuilder::new(src)
-            .with_position([0.1, 0.0, 0.0].into())
-            .build_source();
-        input.context.state().add_source(spatial_src);
+        input.context.state().add_source(src);
     }
 
     let mut buf = vec![(0.0f32, 0.0f32); BUF_SIZE * 2];
     let mut left_buf = vec![0.0f32; BUF_SIZE * 2];
     let mut right_buf = vec![0.0f32; BUF_SIZE * 2];
-    let mut hrtf_reader = Rg3dHrtfReader::new();
+    let mut hrtf_reader = FyroxHrtfReader::new();
 
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
-        if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
+        if input.rate != fyrox_sound::context::SAMPLE_RATE as i32 {
             let end = (i + BUF_SIZE).min(input.out.len());
             let in_samples = input.out_resampler.nbr_frames_needed();
             if with_hrtf {
@@ -232,25 +230,24 @@ fn bench_play_rg3d<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>, with
     }
 
     let prefix = if with_hrtf {
-        "rg3d-fft-hrtf"
+        "fyrox-fft-hrtf"
     } else {
-        "rg3d-fft"
+        "fyrox-fft"
     };
     criterion::black_box(&input.out);
     debug_write_to_file(prefix, input.rate as u32, &input.out);
 }
 
-fn bench_play_rg3d_moving<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R>) {
+fn bench_play_fyrox_moving<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>) {
     for i in 0..input.num_srcs {
-        let src = rg3d_sound::source::generic::GenericSourceBuilder::new()
+        let src = fyrox_sound::source::SoundSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
-            .with_status(rg3d_sound::source::Status::Playing)
+            .with_status(fyrox_sound::source::Status::Playing)
+            // .with_position([0.5, 0.0, 0.0].into())
+            .with_position([0.0, 0.0, 0.0].into())
             .build()
             .unwrap();
-        let spatial_src = rg3d_sound::source::spatial::SpatialSourceBuilder::new(src)
-            // .with_position([0.5, 0.0, 0.0].into())
-            .build_source();
-        input.context.state().add_source(spatial_src);
+        input.context.state().add_source(src);
     }
 
     let mut buf = vec![(0.0f32, 0.0f32); BUF_SIZE * 2];
@@ -262,7 +259,7 @@ fn bench_play_rg3d_moving<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R
         let listener_y = (i as f32 * 0.1).cos();
         input.context.state().listener_mut().set_position([listener_x, listener_y, 0.0].into());
 
-        if input.rate != rg3d_sound::context::SAMPLE_RATE as i32 {
+        if input.rate != fyrox_sound::context::SAMPLE_RATE as i32 {
             let end = (i + BUF_SIZE).min(input.out.len());
             let in_samples = input.out_resampler.nbr_frames_needed();
             input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
@@ -279,7 +276,7 @@ fn bench_play_rg3d_moving<R: rubato::Resampler<f32>>(mut input: BenchRg3dInput<R
     }
 
     criterion::black_box(&input.out);
-    debug_write_to_file("rg3d-fft-moving", input.rate as u32, &input.out);
+    debug_write_to_file("fyrox-fft-moving", input.rate as u32, &input.out);
 }
 
 fn split_stereo(stereo: &[(f32, f32)], left: &mut [f32], right: &mut [f32]) {
@@ -330,8 +327,8 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
     for i in 0..input.num_srcs {
         let frames_signal = oddio::FramesSignal::from(input.frames[i % input.frames.len()].clone());
         // Copy controls from rodio. Stop is already included, see SpatialSceneControl.
-        let signal = oddio::Speed::new(oddio::Gain::new(frames_signal, 1.0));
-        // let signal = frames_signal;
+        // let signal = oddio::Speed::new(oddio::Gain::new(frames_signal, 1.0));
+        let signal = frames_signal;
         input.scene_handle.control().play(signal, oddio::SpatialOptions {
             position: [0.0, 0.0, 0.0].into(),
             // position: [0.5, 0.0, 0.0].into(),
@@ -454,14 +451,14 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             |input| bench_play_rodio(input),
             criterion::BatchSize::SmallInput));
 
-        group.bench_function("rg3d-fft", |b| b.iter_batched(
-            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0, false),
-            |input| bench_play_rg3d(input, false),
+        group.bench_function("fyrox-fft", |b| b.iter_batched(
+            || prepare_fyrox_input_fft(SRC_RATE, vec![], 0, false),
+            |input| bench_play_fyrox(input, false),
             criterion::BatchSize::SmallInput));
 
-        group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
-            || prepare_rg3d_input_fft(SRC_RATE, vec![], 0, false),
-            |input| bench_play_rg3d_moving(input),
+        group.bench_function("fyrox-fft-moving", |b| b.iter_batched(
+            || prepare_fyrox_input_fft(SRC_RATE, vec![], 0, false),
+            |input| bench_play_fyrox_moving(input),
             criterion::BatchSize::SmallInput));
 
         group.bench_function("oddio", |b| b.iter_batched(
@@ -479,19 +476,19 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 |input| bench_play_rodio(input),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
-                |input| bench_play_rg3d(input, false),
+            group.bench_function("fyrox-fft", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_fyrox(input, false),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
-                |input| bench_play_rg3d(input, true),
+            group.bench_function("fyrox-fft-hrtf", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_fyrox(input, true),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
-                |input| bench_play_rg3d_moving(input),
+            group.bench_function("fyrox-fft-moving", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_fyrox_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
@@ -507,19 +504,19 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput));
 
             // NOTE: The quality here is absolutely horrible.
-            group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
-                |input| bench_play_rg3d(input, false),
+            group.bench_function("fyrox-fft", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
+                |input| bench_play_fyrox(input, false),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
-                |input| bench_play_rg3d(input, true),
+            group.bench_function("fyrox-fft-hrtf", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_fyrox(input, true),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
-                |input| bench_play_rg3d_moving(input),
+            group.bench_function("fyrox-fft-moving", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
+                |input| bench_play_fyrox_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
@@ -534,19 +531,19 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 |input| bench_play_rodio(input),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
-                |input| bench_play_rg3d(input, false),
+            group.bench_function("fyrox-fft", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_fyrox(input, false),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-hrtf", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
-                |input| bench_play_rg3d(input, true),
+            group.bench_function("fyrox-fft-hrtf", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, true),
+                |input| bench_play_fyrox(input, true),
                 criterion::BatchSize::SmallInput));
 
-            group.bench_function("rg3d-fft-moving", |b| b.iter_batched(
-                || prepare_rg3d_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
-                |input| bench_play_rg3d_moving(input),
+            group.bench_function("fyrox-fft-moving", |b| b.iter_batched(
+                || prepare_fyrox_input_fft(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs, false),
+                |input| bench_play_fyrox_moving(input),
                 criterion::BatchSize::SmallInput));
 
             group.bench_function("oddio", |b| b.iter_batched(
