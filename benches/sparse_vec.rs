@@ -55,6 +55,16 @@ fn sparse_vec_benchmark<T>(c: &mut Criterion)
         let group = c.benchmark_group(prefix.clone() + "/uniform 0.01/10000 elem");
         run_sparse_vec_benchmark(group, data);
     }
+    let data = generate_uniform_vec::<T>(100000, 0.01, 50);
+    {
+        let group = c.benchmark_group(prefix.clone() + "/uniform 0.01/100000 elem");
+        run_sparse_vec_benchmark(group, data);
+    }
+    let data = generate_uniform_vec::<T>(1000000, 0.001, 25);
+    {
+        let group = c.benchmark_group(prefix.clone() + "/uniform 0.01/1000000 elem");
+        run_sparse_vec_benchmark(group, data);
+    }
 
     let data = generate_uniform_vec::<T>(10, 1.0, 5000);
     {
