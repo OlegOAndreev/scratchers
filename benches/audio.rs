@@ -141,7 +141,7 @@ fn prepare_fyrox_input_fft(
         rate as usize,
         BUF_SIZE,
         1,
-        2);
+        2).expect("could not create FftFixedOut");
     BenchFyroxInput {
         rate,
         engine,
@@ -188,7 +188,7 @@ impl FyroxHrtfReader {
     }
 }
 
-fn bench_play_fyrox<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>, with_hrtf: bool) {
+fn bench_play_fyrox<R: Resampler<f32>>(mut input: BenchFyroxInput<R>, with_hrtf: bool) {
     for i in 0..input.num_srcs {
         let src = fyrox_sound::source::SoundSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
@@ -207,7 +207,7 @@ fn bench_play_fyrox<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>, wi
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
         if input.rate != fyrox_sound::context::SAMPLE_RATE as i32 {
             let end = (i + BUF_SIZE).min(input.out.len());
-            let in_samples = input.out_resampler.nbr_frames_needed();
+            let in_samples = input.out_resampler.input_frames_next();
             if with_hrtf {
                 hrtf_reader.render(&mut input.engine.lock().unwrap(), &mut buf[0..in_samples]);
             } else {
@@ -215,7 +215,7 @@ fn bench_play_fyrox<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>, wi
             }
             split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
             let resampled = input.out_resampler
-                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]])
+                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]], None)
                 .unwrap();
             interleave_stereo(&resampled[0], &resampled[1], &mut input.out[i..end]);
         } else {
@@ -238,7 +238,7 @@ fn bench_play_fyrox<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>, wi
     debug_write_to_file(prefix, input.rate as u32, &input.out);
 }
 
-fn bench_play_fyrox_moving<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput<R>) {
+fn bench_play_fyrox_moving<R: Resampler<f32>>(mut input: BenchFyroxInput<R>) {
     for i in 0..input.num_srcs {
         let src = fyrox_sound::source::SoundSourceBuilder::new()
             .with_buffer(input.buffers[i % input.buffers.len()].clone())
@@ -261,11 +261,11 @@ fn bench_play_fyrox_moving<R: rubato::Resampler<f32>>(mut input: BenchFyroxInput
 
         if input.rate != fyrox_sound::context::SAMPLE_RATE as i32 {
             let end = (i + BUF_SIZE).min(input.out.len());
-            let in_samples = input.out_resampler.nbr_frames_needed();
+            let in_samples = input.out_resampler.input_frames_next();
             input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
             split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
             let resampled = input.out_resampler
-                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]])
+                .process(&[&left_buf[0..in_samples], &right_buf[0..in_samples]], None)
                 .unwrap();
             interleave_stereo(&resampled[0], &resampled[1], &mut input.out[i..end]);
         } else {
@@ -562,7 +562,7 @@ fn prepare_rubato_fft(in_rate: u32, out_rate: u32) -> rubato::FftFixedOut<f32> {
         out_rate as usize,
         BUF_SIZE,
         1,
-        2)
+        2).expect("could not create FftFixedOut")
 }
 
 fn bench_resample_rubato_fft(
@@ -576,11 +576,12 @@ fn bench_resample_rubato_fft(
     let mut right = [0.0f32; BUF_SIZE * 2];
     for i in (0..out_frames.len()).step_by(BUF_SIZE) {
         let end = (i + BUF_SIZE).min(out_frames.len());
-        let in_samples = resampler.nbr_frames_needed();
+        let in_samples = resampler.input_frames_next();
         split_stereo(&in_frames[in_pos..in_pos + in_samples],
                      &mut left[0..in_samples], &mut right[0..in_samples]);
         in_pos += in_samples;
-        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
+        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]], None)
+            .unwrap();
         interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
     }
 
@@ -595,6 +596,7 @@ fn prepare_rubato_sinc(in_rate: u32, out_rate: u32) -> rubato::SincFixedOut<f32>
     let resample_ratio = out_rate as f64 / in_rate as f64;
     rubato::SincFixedOut::<f32>::new(
         resample_ratio,
+        2.0,
         // Copy-pasted from rubato/examples
         rubato::InterpolationParameters {
             sinc_len: 128,
@@ -604,7 +606,7 @@ fn prepare_rubato_sinc(in_rate: u32, out_rate: u32) -> rubato::SincFixedOut<f32>
             window: rubato::WindowFunction::Blackman2,
         },
         BUF_SIZE,
-        2)
+        2).expect("could not create SincFixedOut")
 }
 
 fn bench_resample_rubato_sinc(
@@ -618,11 +620,12 @@ fn bench_resample_rubato_sinc(
     let mut right = [0.0f32; BUF_SIZE * 2];
     for i in (0..out_frames.len()).step_by(BUF_SIZE) {
         let end = (i + BUF_SIZE).min(out_frames.len());
-        let in_samples = resampler.nbr_frames_needed();
+        let in_samples = resampler.input_frames_next();
         split_stereo(&in_frames[in_pos..in_pos + in_samples],
                      &mut left[0..in_samples], &mut right[0..in_samples]);
         in_pos += in_samples;
-        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]]).unwrap();
+        let resampled = resampler.process(&[&left[0..in_samples], &right[0..in_samples]], None)
+            .unwrap();
         interleave_stereo(&resampled[0], &resampled[1], &mut out_frames[i..end]);
     }
 
@@ -658,7 +661,7 @@ fn bench_resample_speexdsp(
     for i in (0..out_len).step_by(BUF_SIZE * 2) {
         let end = (i + BUF_SIZE * 2).min(out_len);
         let (in_processed, out_processed) = resampler
-            .process_float(0, &in_flat[in_pos..], &mut out_flat[i..end])
+            .process(0, &in_flat[in_pos..], &mut out_flat[i..end])
             .unwrap();
         assert_eq!(out_processed, end - i);
         in_pos += in_processed;
