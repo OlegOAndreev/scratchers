@@ -140,8 +140,10 @@ fn run_sparse_vec_benchmark<T>(mut group: BenchmarkGroup<WallTime>, data: Vec<Ve
 
     group.bench_function("sparse u32", |b| b.iter(|| bench_sparse(&sparse_input_u32)));
     group.bench_function("sparse u32 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u32)));
+    group.bench_function("sparse sentinel u32 unsafe", |b| b.iter(|| bench_sparse_sentinel_unsafe(&sparse_input_u32)));
     group.bench_function("sparse soa u32", |b| b.iter(|| bench_sparse_soa(&sparse_input_soa_u32)));
     group.bench_function("sparse soa u32 unsafe", |b| b.iter(|| bench_sparse_soa_unsafe(&sparse_input_soa_u32)));
+    group.bench_function("sparse soa sentinel u32 unsafe", |b| b.iter(|| bench_sparse_soa_sentinel_unsafe(&sparse_input_soa_u32)));
 
     group.bench_function("sparse u64", |b| b.iter(|| bench_sparse(&sparse_input_u64)));
     group.bench_function("sparse u64 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u64)));
@@ -152,14 +154,18 @@ fn run_sparse_vec_benchmark<T>(mut group: BenchmarkGroup<WallTime>, data: Vec<Ve
 }
 
 struct BaseInput<T> {
-    vecs: Vec<Vec<T>>,
+    vecs: Vec<Box<[T]>>,
 }
 
 fn prepare_base_input<T>(data: &Vec<Vec<T>>) -> BaseInput<T>
     where T: Clone
 {
+    let mut vecs = Vec::with_capacity(data.len());
+    for vec in data {
+        vecs.push(vec.clone().into_boxed_slice());
+    }
     BaseInput {
-        vecs: data.to_vec(),
+        vecs,
     }
 }
 
@@ -197,7 +203,7 @@ fn bench_base_iter<T>(input: &BaseInput<T>) -> T
     for i in 0..n {
         for j in 0..n {
             let mut a = T::default();
-            for (&v1, &v2) in input.vecs[i].iter().zip(&input.vecs[j]) {
+            for (&v1, &v2) in input.vecs[i].iter().zip(input.vecs[j].iter()) {
                 a += v1 * v2;
             }
             ret += a;
@@ -232,7 +238,7 @@ fn bench_base_unsafe<T>(input: &BaseInput<T>) -> T
 }
 
 struct SparseInput<T, I> {
-    vecs: Vec<Vec<(I, T)>>,
+    vecs: Vec<Box<[(I, T)]>>,
 }
 
 fn prepare_sparse_input<T, I>(data: &Vec<Vec<T>>) -> SparseInput<T, I>
@@ -241,6 +247,7 @@ fn prepare_sparse_input<T, I>(data: &Vec<Vec<T>>) -> SparseInput<T, I>
           T: PartialEq,
           I: TryFrom<usize>,
           <I as TryFrom<usize>>::Error: Debug,
+          I: MaxValue,
 {
     let mut vecs = Vec::with_capacity(data.len());
     for vec in data {
@@ -250,7 +257,8 @@ fn prepare_sparse_input<T, I>(data: &Vec<Vec<T>>) -> SparseInput<T, I>
                 sparse.push((I::try_from(i).unwrap(), *v));
             }
         }
-        vecs.push(sparse);
+        sparse.push((I::max_value(), T::default()));
+        vecs.push(sparse.into_boxed_slice());
     }
     SparseInput {
         vecs,
@@ -264,6 +272,7 @@ fn bench_sparse<T, I>(input: &SparseInput<T, I>) -> T
           T: ops::Mul<Output=T>,
           I: Copy,
           I: Ord,
+          I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -319,6 +328,7 @@ fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
           T: ops::Mul<Output=T>,
           I: Copy,
           I: Ord,
+          I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -368,9 +378,57 @@ fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
     ret
 }
 
+fn bench_sparse_sentinel_unsafe<T, I>(input: &SparseInput<T, I>) -> T
+    where T: Default,
+          T: Copy,
+          T: ops::AddAssign,
+          T: ops::Mul<Output=T>,
+          I: Copy,
+          I: Ord,
+          I: MaxValue,
+{
+    let mut ret = T::default();
+    let n = input.vecs.len();
+    for i in 0..n {
+        for j in 0..n {
+            let mut a = T::default();
+            let vec1 = &input.vecs[i];
+            let vec2 = &input.vecs[j];
+            unsafe {
+                let base1 = vec1.as_ptr();
+                let base2 = vec2.as_ptr();
+                let mut ptr1 = base1;
+                let mut ptr2 = base2;
+                let mut sidx1 = (*ptr1).0;
+                let mut sidx2 = (*ptr2).0;
+                loop {
+                    if sidx1 < sidx2 {
+                        ptr1 = ptr1.wrapping_add(1);
+                        sidx1 = (*ptr1).0;
+                    } else if sidx1 > sidx2 {
+                        ptr2 = ptr2.wrapping_add(1);
+                        sidx2 = (*ptr2).0;
+                    } else {
+                        if sidx1 == I::max_value() {
+                            break;
+                        }
+                        a += (*ptr1).1 * (*ptr2).1;
+                        ptr1 = ptr1.wrapping_add(1);
+                        ptr2 = ptr2.wrapping_add(1);
+                        sidx1 = (*ptr1).0;
+                        sidx2 = (*ptr2).0;
+                    }
+                }
+            }
+            ret += a;
+        }
+    }
+    ret
+}
+
 
 struct SparseInputSoa<T, I> {
-    vecs: Vec<(Vec<I>, Vec<T>)>,
+    vecs: Vec<(Box<[I]>, Box<[T]>)>,
 }
 
 fn prepare_sparse_input_soa<T, I>(data: &Vec<Vec<T>>) -> SparseInputSoa<T, I>
@@ -379,6 +437,7 @@ fn prepare_sparse_input_soa<T, I>(data: &Vec<Vec<T>>) -> SparseInputSoa<T, I>
           T: PartialEq,
           I: TryFrom<usize>,
           <I as TryFrom<usize>>::Error: Debug,
+          I: MaxValue,
 {
     let mut vecs = Vec::with_capacity(data.len());
     for vec in data {
@@ -390,7 +449,9 @@ fn prepare_sparse_input_soa<T, I>(data: &Vec<Vec<T>>) -> SparseInputSoa<T, I>
                 values.push(*v);
             }
         }
-        vecs.push((indices, values));
+        indices.push(I::max_value());
+        values.push(T::default());
+        vecs.push((indices.into_boxed_slice(), values.into_boxed_slice()));
     }
     SparseInputSoa {
         vecs,
@@ -404,6 +465,7 @@ fn bench_sparse_soa<T, I>(input: &SparseInputSoa<T, I>) -> T
           T: ops::Mul<Output=T>,
           I: Copy,
           I: Ord,
+          I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -459,6 +521,7 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
           T: ops::Mul<Output=T>,
           I: Copy,
           I: Ord,
+          I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -475,21 +538,21 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
             let mut idx1 = 0;
             let mut idx2 = 0;
             unsafe {
-                let mut sidx1 = indices1.get_unchecked(idx1);
-                let mut sidx2 = indices2.get_unchecked(idx2);
+                let mut sidx1 = *indices1.get_unchecked(idx1);
+                let mut sidx2 = *indices2.get_unchecked(idx2);
                 loop {
                     if sidx1 < sidx2 {
                         idx1 += 1;
                         if idx1 == l1 {
                             break;
                         }
-                        sidx1 = indices1.get_unchecked(idx1);
+                        sidx1 = *indices1.get_unchecked(idx1);
                     } else if sidx1 > sidx2 {
                         idx2 += 1;
                         if idx2 == l2 {
                             break;
                         }
-                        sidx2 = indices2.get_unchecked(idx2);
+                        sidx2 = *indices2.get_unchecked(idx2);
                     } else {
                         a += *values1.get_unchecked(idx1) * *values2.get_unchecked(idx2);
                         idx1 += 1;
@@ -497,8 +560,58 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
                         if idx1 == l1 || idx2 == l2 {
                             break;
                         }
-                        sidx1 = indices1.get_unchecked(idx1);
-                        sidx2 = indices2.get_unchecked(idx2);
+                        sidx1 = *indices1.get_unchecked(idx1);
+                        sidx2 = *indices2.get_unchecked(idx2);
+                    }
+                }
+            }
+            ret += a;
+        }
+    }
+    ret
+}
+
+fn bench_sparse_soa_sentinel_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
+    where T: Default,
+          T: Copy,
+          T: ops::AddAssign,
+          T: ops::Mul<Output=T>,
+          I: Copy,
+          I: Ord,
+          I: MaxValue,
+{
+    let mut ret = T::default();
+    let n = input.vecs.len();
+    for i in 0..n {
+        for j in 0..n {
+            let mut a = T::default();
+            let (indices1, values1) = &input.vecs[i];
+            let (indices2, values2) = &input.vecs[j];
+            unsafe {
+                let base1 = indices1.as_ptr();
+                let base2 = indices2.as_ptr();
+                let mut ptr1 = base1;
+                let mut ptr2 = base2;
+                let mut sidx1 = *ptr1;
+                let mut sidx2 = *ptr2;
+                loop {
+                    if sidx1 < sidx2 {
+                        ptr1 = ptr1.wrapping_add(1);
+                        sidx1 = *ptr1;
+                    } else if sidx1 > sidx2 {
+                        ptr2 = ptr2.wrapping_add(1);
+                        sidx2 = *ptr2;
+                    } else {
+                        if sidx1 == I::max_value() {
+                            break;
+                        }
+                        let idx1 = ptr1.offset_from(base1) as usize;
+                        let idx2 = ptr2.offset_from(base2) as usize;
+                        a += *values1.get_unchecked(idx1) * *values2.get_unchecked(idx2);
+                        ptr1 = ptr1.wrapping_add(1);
+                        ptr2 = ptr2.wrapping_add(1);
+                        sidx1 = *ptr1;
+                        sidx2 = *ptr2;
                     }
                 }
             }
@@ -612,6 +725,22 @@ impl One for f64 {
     }
 }
 
+trait MaxValue {
+    fn max_value() -> Self;
+}
+
+impl MaxValue for u32 {
+    fn max_value() -> Self {
+        u32::MAX
+    }
+}
+
+impl MaxValue for u64 {
+    fn max_value() -> Self {
+        u64::MAX
+    }
+}
+
 criterion_group!(sparse_vec_benches, sparse_vec_f32_benchmark, sparse_vec_f64_benchmark);
 criterion_main!(sparse_vec_benches);
 
@@ -620,7 +749,8 @@ criterion_main!(sparse_vec_benches);
 //     let input = prepare_sparse_input_soa::<f32, u32>(&data);
 //     let start = std::time::Instant::now();
 //     for _ in 0..10000 {
-//         criterion::black_box(bench_sparse_soa_unsafe(&input));
+//         criterion::black_box(bench_sparse_soa_sentinel_unsafe(&input));
+//         // criterion::black_box(bench_sparse_unsafe(&input));
 //     }
 //     println!("Got {:?}", std::time::Instant::now() - start);
 // }
