@@ -68,6 +68,3 @@ log = "^0.4"
 [features]
 default = []
 ispc = []
-
-[patch.crates-io]
-oddio = { path = "../../Downloads/src/oddio" }
