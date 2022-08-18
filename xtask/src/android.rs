@@ -1,10 +1,9 @@
-use std::{env, fs};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
 use anyhow::{bail, Context, Result};
 use clap::{App, Arg, ArgMatches, SubCommand};
 use sha2::Digest;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
 
 #[derive(Debug)]
 pub enum Arch {
@@ -52,21 +51,27 @@ const ARGS_ARG: &str = "args";
 pub fn android_subcommand(name: &str) -> App {
     SubCommand::with_name(name)
         .about("Android-related commands")
-        .arg(Arg::with_name(API_LEVEL_ARG)
-            .long("--api-level")
-            .value_name("VERSION")
-            .help("Android API level")
-            .default_value("26"))
-        .arg(Arg::with_name(SDK_ROOT_ARG)
-            .long("--sdk-root")
-            .value_name("PATH")
-            .help("Path to Android SDK (if not set, search in standard locations)")
-            .required(false))
-        .arg(Arg::with_name(NDK_ROOT_ARG)
-            .long("--ndk-root")
-            .value_name("PATH")
-            .help("Path to Android NDK (if not set, search in standard locations)")
-            .required(false))
+        .arg(
+            Arg::with_name(API_LEVEL_ARG)
+                .long("--api-level")
+                .value_name("VERSION")
+                .help("Android API level")
+                .default_value("26"),
+        )
+        .arg(
+            Arg::with_name(SDK_ROOT_ARG)
+                .long("--sdk-root")
+                .value_name("PATH")
+                .help("Path to Android SDK (if not set, search in standard locations)")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(NDK_ROOT_ARG)
+                .long("--ndk-root")
+                .value_name("PATH")
+                .help("Path to Android NDK (if not set, search in standard locations)")
+                .required(false),
+        )
 }
 
 pub fn android_build_subcommand(name: &str) -> App {
@@ -85,10 +90,15 @@ pub fn android_build_subcommand(name: &str) -> App {
 }
 
 pub fn parse_subcommand(matches: &ArgMatches) -> Result<AndroidNdk> {
-    let ndk = find_ndk(matches.value_of(API_LEVEL_ARG), matches.value_of(SDK_ROOT_ARG),
-                       matches.value_of(NDK_ROOT_ARG))?;
-    eprintln!("Using API level {}, SDK root {:?}, NDK root {:?}", ndk.api_level, ndk.sdk_root,
-              ndk.ndk_root);
+    let ndk = find_ndk(
+        matches.value_of(API_LEVEL_ARG),
+        matches.value_of(SDK_ROOT_ARG),
+        matches.value_of(NDK_ROOT_ARG),
+    )?;
+    eprintln!(
+        "Using API level {}, SDK root {:?}, NDK root {:?}",
+        ndk.api_level, ndk.sdk_root, ndk.ndk_root
+    );
     Ok(ndk)
 }
 
@@ -133,17 +143,17 @@ fn get_default_sdk_location() -> Result<PathBuf> {
     if cfg!(target_os = "windows") {
         match dirs::data_local_dir() {
             None => bail!("Could not get AppData dir"),
-            Some(local_dir) => Ok(local_dir.join("Android").join("Sdk"))
+            Some(local_dir) => Ok(local_dir.join("Android").join("Sdk")),
         }
     } else if cfg!(target_os = "macos") {
         match dirs::home_dir() {
             None => bail!("Could not get home dir"),
-            Some(home_dir) => Ok(home_dir.join("Library").join("Android").join("sdk"))
+            Some(home_dir) => Ok(home_dir.join("Library").join("Android").join("sdk")),
         }
     } else if cfg!(target_os = "linux") {
         match dirs::home_dir() {
             None => bail!("Could not get home dir"),
-            Some(home_dir) => Ok(home_dir.join("Android").join("Sdk"))
+            Some(home_dir) => Ok(home_dir.join("Android").join("Sdk")),
         }
     } else {
         bail!("Unsupported host OS")
@@ -172,19 +182,14 @@ fn find_ndk_root(sdk_root: &Path, arg_ndk_root: Option<&str>) -> Result<PathBuf>
 fn find_max_ndk(base_path: &Path) -> Result<PathBuf> {
     let file_name = fs::read_dir(base_path)
         .context("Reading NDK dir")?
-        .filter_map(|e| e.ok()
-            .and_then(|e| e.file_name()
-                .to_str()
-                .map(|n| n.to_string()))
-        )
-        .filter_map(|file_name| semver::Version::parse(&file_name)
-            .ok()
-            .map(|version| (version, file_name))
-        )
+        .filter_map(|e| e.ok().and_then(|e| e.file_name().to_str().map(|n| n.to_string())))
+        .filter_map(|file_name| {
+            semver::Version::parse(&file_name).ok().map(|version| (version, file_name))
+        })
         .max_by_key(|(version, _)| version.clone());
     match file_name {
         None => bail!("Could not find any NDK in {:?}", base_path),
-        Some((_, file_name)) => Ok(base_path.join(file_name))
+        Some((_, file_name)) => Ok(base_path.join(file_name)),
     }
 }
 
@@ -208,13 +213,12 @@ const EXE_EXT: &str = "";
 pub fn parse_build_subcommand(matches: &ArgMatches) -> Result<(Vec<Arch>, Vec<String>)> {
     let arches = match matches.values_of_lossy(ARCH_ARG) {
         None => vec![Arch::AARCH64],
-        Some(value) => {
-            value.iter()
-                .map(|v| v.split(','))
-                .flatten()
-                .map(|s| Arch::from_str(s))
-                .collect::<Result<Vec<_>>>()?
-        }
+        Some(value) => value
+            .iter()
+            .map(|v| v.split(','))
+            .flatten()
+            .map(|s| Arch::from_str(s))
+            .collect::<Result<Vec<_>>>()?,
     };
     let args = matches.values_of_lossy(ARGS_ARG).unwrap_or(vec![]);
     eprintln!("Building for arches {:?}", arches);
@@ -224,30 +228,43 @@ pub fn parse_build_subcommand(matches: &ArgMatches) -> Result<(Vec<Arch>, Vec<St
 pub fn run_build(ndk: &AndroidNdk, arch: Arch, build_args: &[String]) -> Result<()> {
     let verbose = build_args.iter().any(|v| v == "-v");
 
-    let ndk_toolchain_dir = ndk.ndk_root
+    let ndk_toolchain_dir = ndk
+        .ndk_root
         .join("toolchains")
         .join("llvm")
         .join("prebuilt")
         .join(HOST_TOOLCHAIN)
         .join("bin");
     // Env vars for cc crate.
-    let target_cc = ndk_toolchain_dir.join(format!("{}{}-clang{}", arch.to_triple(), ndk.api_level, CLANG_EXT));
-    let target_cxx = ndk_toolchain_dir.join(format!("{}{}-clang++{}", arch.to_triple(), ndk.api_level, CLANG_EXT));
+    let target_cc =
+        ndk_toolchain_dir.join(format!("{}{}-clang{}", arch.to_triple(), ndk.api_level, CLANG_EXT));
+    let target_cxx = ndk_toolchain_dir.join(format!(
+        "{}{}-clang++{}",
+        arch.to_triple(),
+        ndk.api_level,
+        CLANG_EXT
+    ));
     let target_ar = ndk_toolchain_dir.join(format!("llvm-ar{}", EXE_EXT));
     // The c++abi library is required at least for some NDKs, see:
     // * https://github.com/Kitware/CMake/commit/4dca07882944ec5c1d87edf1b7df9f3c7294e0d0
     // * https://android.googlesource.com/platform/ndk/+/43b2de34ef9e3a70573fe51a9e069f985a4be5b9/build/cmake/android.toolchain.cmake#368
     // We use force-frame-pointers because the performance impact is absolutely minimal while the
     // profiling becomes a lot easier.
-    let rustflags = format!("-C linker={} -C link-arg=-lc++abi -C force-frame-pointers=yes", target_cxx.display());
+    let rustflags = format!(
+        "-C linker={} -C link-arg=-lc++abi -C force-frame-pointers=yes",
+        target_cxx.display()
+    );
     // Set CMAKE_TOOLCHAIN_FILE env var for cmake crate.
-    let original_cmake_toolchain_file = ndk.ndk_root
-        .join("build")
-        .join("cmake")
-        .join("android.toolchain.cmake");
-    let cmake_toolchain_contents = format!("set(ANDROID_ABI {})
+    let original_cmake_toolchain_file =
+        ndk.ndk_root.join("build").join("cmake").join("android.toolchain.cmake");
+    let cmake_toolchain_contents = format!(
+        "set(ANDROID_ABI {})
 set(ANDROID_PLATFORM {})
-include({})", arch.to_abi(), ndk.api_level, original_cmake_toolchain_file.display());
+include({})",
+        arch.to_abi(),
+        ndk.api_level,
+        original_cmake_toolchain_file.display()
+    );
     // We need stable toolchain file paths as they get cached by cmake.
     let cmake_toolchain_contents_hash = sha2::Sha256::digest(cmake_toolchain_contents.as_bytes());
     let cmake_toolchain_file = env::temp_dir()
@@ -258,7 +275,11 @@ include({})", arch.to_abi(), ndk.api_level, original_cmake_toolchain_file.displa
         eprintln!("Setting TARGET_AR={}", target_ar.display());
         eprintln!("Setting RUSTFLAGS={}", rustflags);
         eprintln!("Setting CMAKE_TOOLCHAIN_FILE={}", cmake_toolchain_file.display());
-        eprintln!("Writing\n\n{}\n\nto {}", cmake_toolchain_contents, cmake_toolchain_file.display())
+        eprintln!(
+            "Writing\n\n{}\n\nto {}",
+            cmake_toolchain_contents,
+            cmake_toolchain_file.display()
+        )
     }
     fs::write(&cmake_toolchain_file, cmake_toolchain_contents)
         .context("Could not write toolchain.cmake")?;

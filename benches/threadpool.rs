@@ -1,7 +1,7 @@
-use std::sync::{Arc, atomic};
 use std::sync::atomic::{AtomicBool, AtomicI64};
+use std::sync::{atomic, Arc};
 
-use criterion::{black_box, Criterion, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use futures::future;
 use futures::future::FutureExt;
 use futures::task::SpawnExt;
@@ -157,7 +157,8 @@ fn chained_future(job_size: i64, left_jobs: usize) -> future::BoxFuture<'static,
         } else {
             chained_future(job_size, left_jobs - 1).await + v
         }
-    }.boxed()
+    }
+    .boxed()
 }
 
 async fn get_join_handles(handles: Vec<tokio::task::JoinHandle<i64>>) -> Vec<i64> {
@@ -221,8 +222,8 @@ fn run_simple_bench(
 ) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(format!("threadpool/job_size={} num_cpus={}",
-                                              job_size, ncpu));
+    let mut group =
+        c.benchmark_group(format!("threadpool/job_size={} num_cpus={}", job_size, ncpu));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
     group.sample_size(10).bench_function("single thread", |b| {
         b.iter(|| single_threaded(black_box(job_size), NUM_JOBS))
@@ -258,18 +259,19 @@ fn run_chained_bench(
 ) {
     const NUM_JOBS: usize = 10000;
 
-    let mut group = c.benchmark_group(
-        format!("threadpool/chained parallel={} job_size={} num_cpus={}",
-                parallelism, job_size, ncpu));
+    let mut group = c.benchmark_group(format!(
+        "threadpool/chained parallel={} job_size={} num_cpus={}",
+        parallelism, job_size, ncpu
+    ));
     let result = single_threaded(black_box(job_size), NUM_JOBS);
     if parallelism == 1 {
         group.sample_size(10).bench_function("single thread", |b| {
             b.iter(|| single_threaded(black_box(job_size), NUM_JOBS))
         });
     }
-    group.bench_function("rayon", |b| b.iter(|| {
-        rayon_chained(black_box(job_size), NUM_JOBS, parallelism, result)
-    }));
+    group.bench_function("rayon", |b| {
+        b.iter(|| rayon_chained(black_box(job_size), NUM_JOBS, parallelism, result))
+    });
     group.bench_function("tokio", |b| {
         b.iter(|| tokio_chained(rt, black_box(job_size), NUM_JOBS, parallelism, result))
     });
@@ -312,7 +314,8 @@ fn threadpool_chained_benchmark(c: &mut Criterion) {
 }
 
 fn run_threadpool_benchmark<F>(f: F)
-    where F: FnOnce(&tokio::runtime::Runtime, &futures::executor::ThreadPool, usize)
+where
+    F: FnOnce(&tokio::runtime::Runtime, &futures::executor::ThreadPool, usize),
 {
     let ncpu = if let Ok(v) = std::env::var("NUM_CPUS") {
         v.parse::<usize>().unwrap()
@@ -325,15 +328,9 @@ fn run_threadpool_benchmark<F>(f: F)
         .worker_threads(ncpu)
         .build()
         .unwrap();
-    let tp = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(ncpu)
-        .create()
-        .unwrap();
+    let tp = futures::executor::ThreadPoolBuilder::new().pool_size(ncpu).create().unwrap();
     if !RAYON_GLOBAL_INIT.swap(true, atomic::Ordering::SeqCst) {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(ncpu)
-            .build_global()
-            .unwrap();
+        rayon::ThreadPoolBuilder::new().num_threads(ncpu).build_global().unwrap();
     }
     f(&rt, &tp, ncpu);
 }

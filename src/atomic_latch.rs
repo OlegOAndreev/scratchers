@@ -1,5 +1,5 @@
 use std::sync::atomic;
-use std::sync::atomic::{AtomicU64};
+use std::sync::atomic::AtomicU64;
 
 use parking_lot::{Condvar, Mutex};
 

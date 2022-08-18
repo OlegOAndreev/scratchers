@@ -1,6 +1,6 @@
-use std::{alloc, mem};
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
+use std::{alloc, mem};
 
 use crate::atomic_latch::AtomicLatch;
 
@@ -70,10 +70,7 @@ unsafe extern "C" fn ISPCAlloc(
     align: i32,
 ) -> *mut libc::c_void {
     let handle = get_or_alloc_handle(handle_ptr);
-    let layout = alloc::Layout::from_size_align(
-        size as usize,
-        align as usize,
-    ).unwrap();
+    let layout = alloc::Layout::from_size_align(size as usize, align as usize).unwrap();
     let ptr = alloc::alloc(layout);
     handle.allocs.push(Allocation { ptr, layout });
     mem::forget(handle);
@@ -145,4 +142,3 @@ unsafe fn get_or_alloc_handle(handle_ptr: *mut *mut libc::c_void) -> Box<Handle>
     };
     Box::from_raw(*handle_ptr as *mut Handle)
 }
-

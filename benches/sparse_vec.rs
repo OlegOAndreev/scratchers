@@ -15,13 +15,14 @@ pub fn sparse_vec_f64_benchmark(c: &mut Criterion) {
 }
 
 fn sparse_vec_benchmark<T>(c: &mut Criterion)
-    where T: Debug,
-          T: Default,
-          T: One,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          T: PartialEq,
+where
+    T: Debug,
+    T: Default,
+    T: One,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    T: PartialEq,
 {
     let prefix = format!("sparse_vec_{}", any::type_name::<T>());
 
@@ -105,12 +106,13 @@ fn sparse_vec_benchmark<T>(c: &mut Criterion)
 }
 
 fn run_sparse_vec_benchmark<T>(mut group: BenchmarkGroup<WallTime>, data: Vec<Vec<T>>)
-    where T: Debug,
-          T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          T: PartialEq,
+where
+    T: Debug,
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    T: PartialEq,
 {
     let base_input = prepare_base_input(&data);
     let sparse_input_u32 = prepare_sparse_input::<T, u32>(&data);
@@ -139,16 +141,26 @@ fn run_sparse_vec_benchmark<T>(mut group: BenchmarkGroup<WallTime>, data: Vec<Ve
     group.bench_function("base unsafe", |b| b.iter(|| bench_base_unsafe(&base_input)));
 
     group.bench_function("sparse u32", |b| b.iter(|| bench_sparse(&sparse_input_u32)));
-    group.bench_function("sparse u32 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u32)));
-    group.bench_function("sparse sentinel u32 unsafe", |b| b.iter(|| bench_sparse_sentinel_unsafe(&sparse_input_u32)));
+    group
+        .bench_function("sparse u32 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u32)));
+    group.bench_function("sparse sentinel u32 unsafe", |b| {
+        b.iter(|| bench_sparse_sentinel_unsafe(&sparse_input_u32))
+    });
     group.bench_function("sparse soa u32", |b| b.iter(|| bench_sparse_soa(&sparse_input_soa_u32)));
-    group.bench_function("sparse soa u32 unsafe", |b| b.iter(|| bench_sparse_soa_unsafe(&sparse_input_soa_u32)));
-    group.bench_function("sparse soa sentinel u32 unsafe", |b| b.iter(|| bench_sparse_soa_sentinel_unsafe(&sparse_input_soa_u32)));
+    group.bench_function("sparse soa u32 unsafe", |b| {
+        b.iter(|| bench_sparse_soa_unsafe(&sparse_input_soa_u32))
+    });
+    group.bench_function("sparse soa sentinel u32 unsafe", |b| {
+        b.iter(|| bench_sparse_soa_sentinel_unsafe(&sparse_input_soa_u32))
+    });
 
     group.bench_function("sparse u64", |b| b.iter(|| bench_sparse(&sparse_input_u64)));
-    group.bench_function("sparse u64 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u64)));
+    group
+        .bench_function("sparse u64 unsafe", |b| b.iter(|| bench_sparse_unsafe(&sparse_input_u64)));
     group.bench_function("sparse soa u64", |b| b.iter(|| bench_sparse_soa(&sparse_input_soa_u64)));
-    group.bench_function("sparse soa u64 unsafe", |b| b.iter(|| bench_sparse_soa_unsafe(&sparse_input_soa_u64)));
+    group.bench_function("sparse soa u64 unsafe", |b| {
+        b.iter(|| bench_sparse_soa_unsafe(&sparse_input_soa_u64))
+    });
 
     group.bench_function("hashmap", |b| b.iter(|| bench_hashmap(&hashmap_input)));
 }
@@ -158,22 +170,22 @@ struct BaseInput<T> {
 }
 
 fn prepare_base_input<T>(data: &Vec<Vec<T>>) -> BaseInput<T>
-    where T: Clone
+where
+    T: Clone,
 {
     let mut vecs = Vec::with_capacity(data.len());
     for vec in data {
         vecs.push(vec.clone().into_boxed_slice());
     }
-    BaseInput {
-        vecs,
-    }
+    BaseInput { vecs }
 }
 
 fn bench_base<T>(input: &BaseInput<T>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -193,10 +205,11 @@ fn bench_base<T>(input: &BaseInput<T>) -> T
 }
 
 fn bench_base_iter<T>(input: &BaseInput<T>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -213,10 +226,11 @@ fn bench_base_iter<T>(input: &BaseInput<T>) -> T
 }
 
 fn bench_base_unsafe<T>(input: &BaseInput<T>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -242,12 +256,13 @@ struct SparseInput<T, I> {
 }
 
 fn prepare_sparse_input<T, I>(data: &Vec<Vec<T>>) -> SparseInput<T, I>
-    where T: Default,
-          T: Copy,
-          T: PartialEq,
-          I: TryFrom<usize>,
-          <I as TryFrom<usize>>::Error: Debug,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: PartialEq,
+    I: TryFrom<usize>,
+    <I as TryFrom<usize>>::Error: Debug,
+    I: MaxValue,
 {
     let mut vecs = Vec::with_capacity(data.len());
     for vec in data {
@@ -260,19 +275,18 @@ fn prepare_sparse_input<T, I>(data: &Vec<Vec<T>>) -> SparseInput<T, I>
         sparse.push((I::max_value(), T::default()));
         vecs.push(sparse.into_boxed_slice());
     }
-    SparseInput {
-        vecs,
-    }
+    SparseInput { vecs }
 }
 
 fn bench_sparse<T, I>(input: &SparseInput<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -320,15 +334,15 @@ fn bench_sparse<T, I>(input: &SparseInput<T, I>) -> T
     ret
 }
 
-
 fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -379,13 +393,14 @@ fn bench_sparse_unsafe<T, I>(input: &SparseInput<T, I>) -> T
 }
 
 fn bench_sparse_sentinel_unsafe<T, I>(input: &SparseInput<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -426,18 +441,18 @@ fn bench_sparse_sentinel_unsafe<T, I>(input: &SparseInput<T, I>) -> T
     ret
 }
 
-
 struct SparseInputSoa<T, I> {
     vecs: Vec<(Box<[I]>, Box<[T]>)>,
 }
 
 fn prepare_sparse_input_soa<T, I>(data: &Vec<Vec<T>>) -> SparseInputSoa<T, I>
-    where T: Default,
-          T: Copy,
-          T: PartialEq,
-          I: TryFrom<usize>,
-          <I as TryFrom<usize>>::Error: Debug,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: PartialEq,
+    I: TryFrom<usize>,
+    <I as TryFrom<usize>>::Error: Debug,
+    I: MaxValue,
 {
     let mut vecs = Vec::with_capacity(data.len());
     for vec in data {
@@ -453,19 +468,18 @@ fn prepare_sparse_input_soa<T, I>(data: &Vec<Vec<T>>) -> SparseInputSoa<T, I>
         values.push(T::default());
         vecs.push((indices.into_boxed_slice(), values.into_boxed_slice()));
     }
-    SparseInputSoa {
-        vecs,
-    }
+    SparseInputSoa { vecs }
 }
 
 fn bench_sparse_soa<T, I>(input: &SparseInputSoa<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -513,15 +527,15 @@ fn bench_sparse_soa<T, I>(input: &SparseInputSoa<T, I>) -> T
     ret
 }
 
-
 fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -572,13 +586,14 @@ fn bench_sparse_soa_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
 }
 
 fn bench_sparse_soa_sentinel_unsafe<T, I>(input: &SparseInputSoa<T, I>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
-          I: Copy,
-          I: Ord,
-          I: MaxValue,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
+    I: Copy,
+    I: Ord,
+    I: MaxValue,
 {
     let mut ret = T::default();
     let n = input.vecs.len();
@@ -626,9 +641,10 @@ struct MapInput<T> {
 }
 
 fn prepare_hashmap_input<T>(data: &Vec<Vec<T>>) -> MapInput<T>
-    where T: Default,
-          T: Copy,
-          T: PartialEq,
+where
+    T: Default,
+    T: Copy,
+    T: PartialEq,
 {
     let mut maps = Vec::with_capacity(data.len());
     for vec in data {
@@ -640,16 +656,15 @@ fn prepare_hashmap_input<T>(data: &Vec<Vec<T>>) -> MapInput<T>
         }
         maps.push(map);
     }
-    MapInput {
-        maps,
-    }
+    MapInput { maps }
 }
 
 fn bench_hashmap<T>(input: &MapInput<T>) -> T
-    where T: Default,
-          T: Copy,
-          T: ops::AddAssign,
-          T: ops::Mul<Output=T>,
+where
+    T: Default,
+    T: Copy,
+    T: ops::AddAssign,
+    T: ops::Mul<Output = T>,
 {
     let mut ret = T::default();
     let n = input.maps.len();
@@ -670,8 +685,9 @@ fn bench_hashmap<T>(input: &MapInput<T>) -> T
 }
 
 fn generate_uniform_vec<T>(size: usize, fill_rate: f64, num_vecs: usize) -> Vec<Vec<T>>
-    where T: Default,
-          T: One
+where
+    T: Default,
+    T: One,
 {
     let mut ret = Vec::with_capacity(num_vecs);
     for _ in 0..num_vecs {
@@ -689,8 +705,9 @@ fn generate_uniform_vec<T>(size: usize, fill_rate: f64, num_vecs: usize) -> Vec<
 }
 
 fn generate_exp_vec<T>(size: usize, num_vecs: usize) -> Vec<Vec<T>>
-    where T: Default,
-          T: One
+where
+    T: Default,
+    T: One,
 {
     const BASE: f64 = 0.75;
     let mut ret = Vec::with_capacity(num_vecs);

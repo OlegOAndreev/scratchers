@@ -87,7 +87,8 @@ impl AlignedMatrix {
     // Returns slice of f32 elements from the given row.
     #[inline(always)]
     pub fn as_f32_slice<S>(&self, row_index: usize, bounds: S) -> &[f32]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let row_start = row_index * self.vec4_stride * 4;
         let start = match bounds.start_bound() {
@@ -100,8 +101,12 @@ impl AlignedMatrix {
             Bound::Excluded(&bound) => bound,
             Bound::Unbounded => self.num_columns,
         };
-        assert!(end <= self.num_columns, "Out of bounds slice end: {}, num columns {}",
-                end, self.num_columns);
+        assert!(
+            end <= self.num_columns,
+            "Out of bounds slice end: {}, num columns {}",
+            end,
+            self.num_columns
+        );
         let storage: &[f32] = bytemuck::cast_slice(&self.storage[..]);
         &storage[row_start + start..row_start + end]
     }
@@ -109,7 +114,8 @@ impl AlignedMatrix {
     // Returns mutable slice of f32 elements from the given row.
     #[inline(always)]
     pub fn as_f32_slice_mut<S>(&mut self, row_index: usize, bounds: S) -> &mut [f32]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let row_start = row_index * self.vec4_stride * 4;
         let start = match bounds.start_bound() {
@@ -122,8 +128,12 @@ impl AlignedMatrix {
             Bound::Excluded(&bound) => bound,
             Bound::Unbounded => self.num_columns,
         };
-        assert!(end <= self.num_columns, "Out of bounds slice end: {}, num columns {}",
-                end, self.num_columns);
+        assert!(
+            end <= self.num_columns,
+            "Out of bounds slice end: {}, num columns {}",
+            end,
+            self.num_columns
+        );
         let storage: &mut [f32] = bytemuck::cast_slice_mut(&mut self.storage[..]);
         &mut storage[row_start + start..row_start + end]
     }
@@ -131,7 +141,8 @@ impl AlignedMatrix {
     // Returns slice of Vec4 elements from the given row. range must be in Vec4 elements.
     #[inline(always)]
     pub fn as_vec4_slice<S>(&self, row_index: usize, bounds: S) -> &[Vec4]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let row_start = row_index * self.vec4_stride;
         let start = match bounds.start_bound() {
@@ -150,7 +161,8 @@ impl AlignedMatrix {
     // Returns mutable slice of Vec4 elements from the given row. range must be in Vec4 elements.
     #[inline(always)]
     pub fn as_vec4_slice_mut<S>(&mut self, row_index: usize, bounds: S) -> &mut [Vec4]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let row_start = row_index * self.vec4_stride;
         let start = match bounds.start_bound() {
@@ -287,7 +299,8 @@ impl AlignedVec {
     // Returns slice of f32 elements.
     #[inline(always)]
     pub fn as_f32_slice<S>(&self, bounds: S) -> &[f32]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
@@ -307,7 +320,8 @@ impl AlignedVec {
     // Returns mutable slice of f32 elements.
     #[inline(always)]
     pub fn as_f32_slice_mut<S>(&mut self, bounds: S) -> &mut [f32]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
@@ -327,7 +341,8 @@ impl AlignedVec {
     // Returns slice of Vec4 elements. range must be in Vec4 elements.
     #[inline(always)]
     pub fn as_vec4_slice<S>(&self, bounds: S) -> &[Vec4]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
@@ -345,7 +360,8 @@ impl AlignedVec {
     // Returns mutable slice of Vec4 elements. range must be in Vec4 elements.
     #[inline(always)]
     pub fn as_vec4_slice_mut<S>(&mut self, bounds: S) -> &mut [Vec4]
-        where S: RangeBounds<usize>
+    where
+        S: RangeBounds<usize>,
     {
         let start = match bounds.start_bound() {
             Bound::Included(&bound) => bound,
@@ -576,8 +592,12 @@ mod tests {
                 // Write through Vec4 slice.
                 for r in 0..h {
                     for i in 0..w4 {
-                        let value = Vec4::new(BASE * 10.0, 1.0 + BASE * 10.0,
-                                              2.0 + BASE * 10.0, 3.0 + BASE * 10.0);
+                        let value = Vec4::new(
+                            BASE * 10.0,
+                            1.0 + BASE * 10.0,
+                            2.0 + BASE * 10.0,
+                            3.0 + BASE * 10.0,
+                        );
                         m.as_vec4_mut(r)[i] = value;
                         test_row_vec4(&m, r, i, value);
                     }
@@ -585,8 +605,12 @@ mod tests {
 
                 for r in 0..h {
                     for i in 0..w4 {
-                        let value = Vec4::new(BASE * 3.0, 1.0 + BASE * 3.0,
-                                              2.0 + BASE * 3.0, 3.0 + BASE * 3.0);
+                        let value = Vec4::new(
+                            BASE * 3.0,
+                            1.0 + BASE * 3.0,
+                            2.0 + BASE * 3.0,
+                            3.0 + BASE * 3.0,
+                        );
                         m.as_vec4_slice_mut(r, ..)[i] = value;
                         test_row_vec4(&m, r, i, value);
                     }
@@ -594,8 +618,12 @@ mod tests {
 
                 for r in 0..h {
                     for i in 0..w4 + 1 {
-                        let value = Vec4::new(BASE * 6.0, 1.0 + BASE * 6.0,
-                                              2.0 + BASE * 6.0, 3.0 + BASE * 6.0);
+                        let value = Vec4::new(
+                            BASE * 6.0,
+                            1.0 + BASE * 6.0,
+                            2.0 + BASE * 6.0,
+                            3.0 + BASE * 6.0,
+                        );
                         let s = m.as_vec4_slice_mut(r, i..);
                         assert_eq!(s.len(), w4 - i);
                         if i < w4 {
@@ -607,8 +635,12 @@ mod tests {
 
                 for r in 0..h {
                     for i in 0..w4 + 1 {
-                        let value = Vec4::new(BASE * 7.0, 1.0 + BASE * 7.0,
-                                              2.0 + BASE * 7.0, 3.0 + BASE * 7.0);
+                        let value = Vec4::new(
+                            BASE * 7.0,
+                            1.0 + BASE * 7.0,
+                            2.0 + BASE * 7.0,
+                            3.0 + BASE * 7.0,
+                        );
                         let s = m.as_vec4_slice_mut(r, ..i);
                         assert_eq!(s.len(), i);
                         if i > 0 {
@@ -620,8 +652,12 @@ mod tests {
 
                 for r in 0..h {
                     for i in 0..w4 {
-                        let value = Vec4::new(BASE * 8.0, 1.0 + BASE * 8.0,
-                                              2.0 + BASE * 8.0, 3.0 + BASE * 8.0);
+                        let value = Vec4::new(
+                            BASE * 8.0,
+                            1.0 + BASE * 8.0,
+                            2.0 + BASE * 8.0,
+                            3.0 + BASE * 8.0,
+                        );
                         let s = m.as_vec4_slice_mut(r, i..i + 1);
                         assert_eq!(s.len(), 1);
                         s[0] = value;
@@ -793,22 +829,22 @@ mod tests {
 
             // Write through Vec4 slice.
             for i in 0..l4 {
-                let value = Vec4::new(BASE * 10.0, 1.0 + BASE * 10.0,
-                                      2.0 + BASE * 10.0, 3.0 + BASE * 10.0);
+                let value =
+                    Vec4::new(BASE * 10.0, 1.0 + BASE * 10.0, 2.0 + BASE * 10.0, 3.0 + BASE * 10.0);
                 v.as_vec4_mut()[i] = value;
                 test_vec4(&v, i, value);
             }
 
             for i in 0..l4 {
-                let value = Vec4::new(BASE * 3.0, 1.0 + BASE * 3.0,
-                                      2.0 + BASE * 3.0, 3.0 + BASE * 3.0);
+                let value =
+                    Vec4::new(BASE * 3.0, 1.0 + BASE * 3.0, 2.0 + BASE * 3.0, 3.0 + BASE * 3.0);
                 v.as_vec4_slice_mut(..)[i] = value;
                 test_vec4(&v, i, value);
             }
 
             for i in 0..l4 + 1 {
-                let value = Vec4::new(BASE * 4.0, 1.0 + BASE * 4.0,
-                                      2.0 + BASE * 4.0, 3.0 + BASE * 4.0);
+                let value =
+                    Vec4::new(BASE * 4.0, 1.0 + BASE * 4.0, 2.0 + BASE * 4.0, 3.0 + BASE * 4.0);
                 let s = v.as_vec4_slice_mut(i..);
                 assert_eq!(s.len(), l4 - i);
                 if i < l4 {
@@ -818,8 +854,8 @@ mod tests {
             }
 
             for i in 0..l4 + 1 {
-                let value = Vec4::new(BASE * 5.0, 1.0 + BASE * 5.0,
-                                      2.0 + BASE * 5.0, 3.0 + BASE * 5.0);
+                let value =
+                    Vec4::new(BASE * 5.0, 1.0 + BASE * 5.0, 2.0 + BASE * 5.0, 3.0 + BASE * 5.0);
                 let s = v.as_vec4_slice_mut(..i);
                 assert_eq!(s.len(), i);
                 if i > 0 {
@@ -829,8 +865,8 @@ mod tests {
             }
 
             for i in 0..l4 {
-                let value = Vec4::new(BASE * 6.0, 1.0 + BASE * 6.0,
-                                      2.0 + BASE * 6.0, 3.0 + BASE * 6.0);
+                let value =
+                    Vec4::new(BASE * 6.0, 1.0 + BASE * 6.0, 2.0 + BASE * 6.0, 3.0 + BASE * 6.0);
                 let s = v.as_vec4_slice_mut(i..i + 1);
                 assert_eq!(s.len(), 1);
                 s[0] = value;
@@ -843,10 +879,18 @@ mod tests {
         match size - i * 4 {
             1 => vec4((i * 4) as f32 + base, 0.0, 0.0, 0.0),
             2 => vec4((i * 4) as f32 + base, (i * 4 + 1) as f32 + base, 0.0, 0.0),
-            3 => vec4((i * 4) as f32 + base, (i * 4 + 1) as f32 + base,
-                      (i * 4 + 2) as f32 + base, 0.0),
-            _ => vec4((i * 4) as f32 + base, (i * 4 + 1) as f32 + base,
-                      (i * 4 + 2) as f32 + base, (i * 4 + 3) as f32 + base)
+            3 => vec4(
+                (i * 4) as f32 + base,
+                (i * 4 + 1) as f32 + base,
+                (i * 4 + 2) as f32 + base,
+                0.0,
+            ),
+            _ => vec4(
+                (i * 4) as f32 + base,
+                (i * 4 + 1) as f32 + base,
+                (i * 4 + 2) as f32 + base,
+                (i * 4 + 3) as f32 + base,
+            ),
         }
     }
 
@@ -854,10 +898,18 @@ mod tests {
         match size - i * 4 {
             1 => vec4((i * 4 + r * 5) as f32 + base, 0.0, 0.0, 0.0),
             2 => vec4((i * 4 + r * 5) as f32 + base, (i * 4 + r * 5 + 1) as f32 + base, 0.0, 0.0),
-            3 => vec4((i * 4 + r * 5) as f32 + base, (i * 4 + r * 5 + 1) as f32 + base,
-                      (i * 4 + r * 5 + 2) as f32 + base, 0.0),
-            _ => vec4((i * 4 + r * 5) as f32 + base, (i * 4 + r * 5 + 1) as f32 + base,
-                      (i * 4 + r * 5 + 2) as f32 + base, (i * 4 + r * 5 + 3) as f32 + base)
+            3 => vec4(
+                (i * 4 + r * 5) as f32 + base,
+                (i * 4 + r * 5 + 1) as f32 + base,
+                (i * 4 + r * 5 + 2) as f32 + base,
+                0.0,
+            ),
+            _ => vec4(
+                (i * 4 + r * 5) as f32 + base,
+                (i * 4 + r * 5 + 1) as f32 + base,
+                (i * 4 + r * 5 + 2) as f32 + base,
+                (i * 4 + r * 5 + 3) as f32 + base,
+            ),
         }
     }
 

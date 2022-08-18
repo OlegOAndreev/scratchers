@@ -14,11 +14,10 @@ const ANDROID_COMMAND: &str = "android";
 const ANDROID_BUILD_COMMAND: &str = "build";
 
 fn try_main() -> Result<()> {
-    let app = App::new("xtask")
-        .about("Must be run as cargo xtask")
-        .subcommand(android::android_subcommand(ANDROID_COMMAND)
-            .subcommand(android::android_build_subcommand(ANDROID_BUILD_COMMAND))
-        );
+    let app = App::new("xtask").about("Must be run as cargo xtask").subcommand(
+        android::android_subcommand(ANDROID_COMMAND)
+            .subcommand(android::android_build_subcommand(ANDROID_BUILD_COMMAND)),
+    );
     let matches = app.get_matches();
 
     if let Some(subcommand) = matches.subcommand_matches(ANDROID_COMMAND) {
