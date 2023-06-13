@@ -1,4 +1,4 @@
-use std::{env};
+use std::{env, fs};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -51,9 +51,8 @@ fn compile_ispc() -> Result<()> {
             bail!("Failed to compile ISPC source file {}", ispc_path.display());
         }
 
-        // TODO: This forces rebuild on each iteration, check out the ways to skip the rebuild
-        // if nothing changed.
-        // println!("cargo:rerun-if-changed={:?}", ispc_path);
+        // The path must be absolute or cargo/rustc get really confused.
+        println!("cargo:rerun-if-changed={}", fs::canonicalize(&ispc_path)?.display());
     }
     build.compile("scratchers_ispc");
 
