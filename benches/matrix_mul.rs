@@ -1,21 +1,11 @@
-// #![allow(non_snake_case)]
-
-// use std::cell::RefCell;
-// use std::ops::{DerefMut, Range};
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-// use std::time::Duration;
-//
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::distributions::Distribution;
+use scratchers::tile_mul::{mul_tile_generic, mul_tile_simd};
 
-// use rayon::iter::{IndexedParallelIterator, ParallelIterator};
-// use rayon::prelude::{ParallelSlice, ParallelSliceMut};
-//
-// use scratchers::gpu::Gpu;
-//
 static RAYON_GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
 const SIZE_AND_COUNT: &[(usize, usize)] = &[
@@ -137,19 +127,7 @@ fn simple_tile_mul<const TILE_SIZE: usize>(input: &mut MatrixMulInput) {
         for ib in (0..n).step_by(TILE_SIZE) {
             for jb in (0..n).step_by(TILE_SIZE) {
                 for kb in (0..n).step_by(TILE_SIZE) {
-                    // Multiply tile_1 * tile_2 and add to tile_dst.
-                    for i in ib..ib + TILE_SIZE {
-                        for j in jb..jb + TILE_SIZE {
-                            let mut acc = 0.0f32;
-                            for k in kb..kb + TILE_SIZE {
-                                unsafe {
-                                    acc +=
-                                        *m1.get_unchecked(i * n + k) * *m2.get_unchecked(k * n + j);
-                                }
-                            }
-                            md[i * n + j] += acc;
-                        }
-                    }
+                    mul_tile_generic::<TILE_SIZE>(m1, m2, md, ib, jb, kb, n);
                 }
             }
         }
@@ -183,21 +161,36 @@ fn two_tiered_tile_mul<const TILE_SIZE: usize, const TILE_MUL: usize>(input: &mu
                         for jt in (jb..jb + big_tile_size).step_by(TILE_SIZE) {
                             for kt in (kb..kb + big_tile_size).step_by(TILE_SIZE) {
                                 // Multiply inner tiles.
-                                for i in it..it + TILE_SIZE {
-                                    for j in jt..jt + TILE_SIZE {
-                                        let mut acc = 0.0f32;
-                                        for k in kt..kt + TILE_SIZE {
-                                            unsafe {
-                                                acc += *m1.get_unchecked(i * n + k)
-                                                    * *m2.get_unchecked(k * n + j);
-                                            }
-                                        }
-                                        md[i * n + j] += acc;
-                                    }
-                                }
+                                mul_tile_generic::<TILE_SIZE>(m1, m2, md, it, jt, kt, n);
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// Simplest tiling algorithm with SIMD: single size tile.
+fn simple_tile_mul_simd<const TILE_SIZE: usize>(input: &mut MatrixMulInput) {
+    assert_eq!(
+        input.size % TILE_SIZE,
+        0,
+        "input size {} must be divisible by {}",
+        input.size,
+        TILE_SIZE
+    );
+
+    let n = input.size;
+    for c in 0..input.mat_dst.len() {
+        let m1 = &input.mat_1[c];
+        let m2 = &input.mat_2[c];
+        let md = &mut input.mat_dst[c];
+        md.fill(0.0);
+        for ib in (0..n).step_by(TILE_SIZE) {
+            for jb in (0..n).step_by(TILE_SIZE) {
+                for kb in (0..n).step_by(TILE_SIZE) {
+                    mul_tile_simd::<TILE_SIZE>(m1, m2, md, ib, jb, kb, n);
                 }
             }
         }
@@ -304,6 +297,21 @@ fn matrix_mul_multiply(c: &mut Criterion) {
                 });
             }
         }
+
+        group.bench_function("CPU simple simd tile 8x8 single thread", |b| {
+            b.iter(|| simple_tile_mul_simd::<8>(&mut input));
+            input.assert_dst_equals_to(&golden_dst);
+        });
+
+        group.bench_function("CPU simple simd tile 16x16 single thread", |b| {
+            b.iter(|| simple_tile_mul_simd::<16>(&mut input));
+            input.assert_dst_equals_to(&golden_dst);
+        });
+
+        group.bench_function("CPU simple simd tile 32x32 single thread", |b| {
+            b.iter(|| simple_tile_mul_simd::<32>(&mut input));
+            input.assert_dst_equals_to(&golden_dst);
+        });
 
         // group.bench_function("CPU vectorized tile 8x8 single thread", |b| {
         //     b.iter(|| interleaved_tile_mul::<8>(&mut input));

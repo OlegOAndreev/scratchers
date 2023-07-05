@@ -1,3 +1,4 @@
 pub mod atomic_latch;
-pub mod vulkan_gpu;
 pub mod ispc_task;
+pub mod tile_mul;
+pub mod vulkan_gpu;
