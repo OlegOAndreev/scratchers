@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -198,6 +201,7 @@ fn simple_tile_mul_simd<const TILE_SIZE: usize>(input: &mut MatrixMulInput) {
 }
 
 // Simplest algorithm in ISPC: three nested loops.
+#[cfg(feature = "ispc")]
 fn simplest_ispc_mul(input: &mut MatrixMulInput) {
     let n = input.size;
     for c in 0..input.mat_dst.len() {
@@ -241,6 +245,7 @@ fn matrix_mul_multiply(c: &mut Criterion) {
                 input.assert_dst_equals_to(&golden_dst);
             });
 
+            #[cfg(feature = "ispc")]
             group.bench_function("CPU ISPC standard single thread", |b| {
                 b.iter(|| simplest_ispc_mul(&mut input));
                 input.assert_dst_equals_to(&golden_dst);
@@ -338,6 +343,7 @@ fn init_rayon() -> usize {
     } else {
         num_cpus::get_physical()
     };
+    #[cfg(feature = "ispc")]
     if !RAYON_GLOBAL_INIT.swap(true, atomic::Ordering::SeqCst) {
         rayon::ThreadPoolBuilder::new().num_threads(ncpu).build_global().unwrap();
     }

@@ -1,3 +1,8 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_mut)]
+#![allow(unused_variables)]
+
 use std::fs;
 use std::io::Cursor;
 use std::sync::{Arc, atomic, Mutex};
@@ -5,7 +10,11 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::{bail, Result};
 use criterion::{Criterion, criterion_group, criterion_main};
+#[cfg(feature = "fyrox-sound")]
+use fyrox_sound::buffer::SoundBufferResourceExtension;
+#[cfg(feature = "rodio")]
 use rodio::Source;
+#[cfg(feature = "rubato")]
 use rubato::Resampler;
 
 const NUM_CHANNELS: i32 = 2;
@@ -27,13 +36,16 @@ static DEBUG_WRITE_TO_FILE: AtomicBool = AtomicBool::new(false);
 
 // cpal::Device is not a trait, so we cannot use rodio::OutputStream and have to manually
 // construct dynamic mixer with f32 type (see stream.rs in rodio)
+#[cfg(feature = "rodio")]
 struct RodioMixer {
     mixer: rodio::dynamic_mixer::DynamicMixer<f32>,
     controller: Arc<rodio::dynamic_mixer::DynamicMixerController<f32>>,
 }
 
+#[cfg(feature = "rodio")]
 type RodioSource = dyn Source<Item = f32> + Send;
 
+#[cfg(feature = "rodio")]
 struct BenchRodioInput {
     mixer: RodioMixer,
     src_data: Vec<Arc<[u8]>>,
@@ -41,6 +53,7 @@ struct BenchRodioInput {
     out: Vec<(f32, f32)>,
 }
 
+#[cfg(feature = "rodio")]
 fn prepare_rodio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchRodioInput {
     let (controller, mixer) = rodio::dynamic_mixer::mixer(NUM_CHANNELS as u16, rate as u32);
     let src_data_arc: Vec<Arc<[u8]>> = src_data.iter().map(|&d| Arc::from(d)).collect();
@@ -53,6 +66,7 @@ fn prepare_rodio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> Benc
     }
 }
 
+#[cfg(feature = "rodio")]
 fn make_rodio_source(data: &Arc<[u8]>) -> Box<RodioSource> {
     // Copy from append() from rodio::SpatialSink and rodio::Sink. We ignore all the sync costs as
     // they should generally be negligible (only run at the start and the end of playing the sound).
@@ -72,6 +86,7 @@ fn make_rodio_source(data: &Arc<[u8]>) -> Box<RodioSource> {
     ))
 }
 
+#[cfg(feature = "rodio")]
 fn bench_play_rodio(mut input: BenchRodioInput) {
     for i in 0..input.num_srcs {
         let src = &input.src_data[i % input.src_data.len()];
@@ -95,9 +110,10 @@ fn bench_play_rodio(mut input: BenchRodioInput) {
 
 // fyrox-sound.
 
+#[cfg(feature = "fyrox-sound")]
 struct BenchFyroxInput<R: Resampler<f32>> {
     rate: i32,
-    engine: Arc<Mutex<fyrox_sound::engine::SoundEngine>>,
+    engine: fyrox_sound::engine::SoundEngine,
     context: fyrox_sound::context::SoundContext,
     buffers: Vec<fyrox_sound::buffer::SoundBufferResource>,
     num_srcs: usize,
@@ -105,6 +121,7 @@ struct BenchFyroxInput<R: Resampler<f32>> {
     out: Vec<(f32, f32)>,
 }
 
+#[cfg(feature = "fyrox-sound")]
 fn prepare_fyrox_input_fft(
     rate: i32,
     src_data: Vec<&[u8]>,
@@ -113,7 +130,7 @@ fn prepare_fyrox_input_fft(
 ) -> BenchFyroxInput<rubato::FftFixedOut<f32>> {
     let engine = fyrox_sound::engine::SoundEngine::without_device();
     let context = fyrox_sound::context::SoundContext::new();
-    engine.lock().unwrap().add_context(context.clone());
+    engine.state().add_context(context.clone());
     let buffers: Vec<_> = src_data
         .iter()
         .map(|d| {
@@ -157,14 +174,16 @@ fn prepare_fyrox_input_fft(
 // fyrox-sound requires the render() to be called with a specific buffer size
 // (fyrox_sound::engine::SoundEngine::render_buffer_len()) while we need to produce chunks
 // of different size. fyroxHrtfReader allows rendering into buffers of any size.
+#[cfg(feature = "fyrox-sound")]
 struct FyroxHrtfReader {
     chunk: Vec<(f32, f32)>,
     pos: usize,
 }
 
+#[cfg(feature = "fyrox-sound")]
 impl FyroxHrtfReader {
     fn new() -> Self {
-        let chunk_size = fyrox_sound::engine::SoundEngine::render_buffer_len();
+        let chunk_size = fyrox_sound::engine::State::render_buffer_len();
         Self {
             chunk: vec![(0.0, 0.0); chunk_size],
             pos: chunk_size,
@@ -183,12 +202,13 @@ impl FyroxHrtfReader {
             }
             buf[buf_pos..buf_pos + chunk_remaining].copy_from_slice(&self.chunk[self.pos..]);
             buf_pos += chunk_remaining;
-            engine.render(&mut self.chunk);
+            engine.state().render(&mut self.chunk);
             self.pos = 0;
         }
     }
 }
 
+#[cfg(feature = "fyrox-sound")]
 fn bench_play_fyrox<R: Resampler<f32>>(
     mut input: BenchFyroxInput<R>,
     with_hrtf: bool,
@@ -224,9 +244,9 @@ fn bench_play_fyrox<R: Resampler<f32>>(
             let end = (i + BUF_SIZE).min(input.out.len());
             let in_samples = input.out_resampler.input_frames_next();
             if with_hrtf {
-                hrtf_reader.render(&mut input.engine.lock().unwrap(), &mut buf[0..in_samples]);
+                hrtf_reader.render(&mut input.engine, &mut buf[0..in_samples]);
             } else {
-                input.engine.lock().unwrap().render(&mut buf[0..in_samples]);
+                input.engine.state().render(&mut buf[0..in_samples]);
             }
             split_stereo(&buf[0..in_samples], &mut left_buf, &mut right_buf);
             let resampled = input
@@ -237,9 +257,9 @@ fn bench_play_fyrox<R: Resampler<f32>>(
         } else {
             let end = (i + BUF_SIZE).min(input.out.len());
             if with_hrtf {
-                hrtf_reader.render(&mut input.engine.lock().unwrap(), &mut buf[0..BUF_SIZE]);
+                hrtf_reader.render(&mut input.engine, &mut buf[0..BUF_SIZE]);
             } else {
-                input.engine.lock().unwrap().render(&mut buf[0..BUF_SIZE]);
+                input.engine.state().render(&mut buf[0..BUF_SIZE]);
             }
             input.out[i..end].copy_from_slice(&buf[0..end - i]);
         }
@@ -270,6 +290,7 @@ fn interleave_stereo(left: &[f32], right: &[f32], stereo: &mut [(f32, f32)]) {
 
 // Oddio.
 
+#[cfg(feature = "oddio")]
 struct BenchOddioInput {
     rate: i32,
     scene: oddio::SplitSignal<oddio::SpatialScene>,
@@ -279,6 +300,7 @@ struct BenchOddioInput {
     out: Vec<[f32; 2]>,
 }
 
+#[cfg(feature = "oddio")]
 fn prepare_oddio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchOddioInput {
     let (scene_handle, scene) = oddio::split(oddio::SpatialScene::new());
     let mut frames = vec![];
@@ -298,6 +320,7 @@ fn prepare_oddio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> Benc
     }
 }
 
+#[cfg(feature = "oddio")]
 fn bench_play_oddio(mut input: BenchOddioInput) {
     let mut handles = vec![];
     for i in 0..input.num_srcs {
@@ -432,6 +455,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
 
     {
         let mut group = c.benchmark_group("audio/empty");
+        #[cfg(feature = "rodio")]
         group.bench_function("rodio", |b| {
             b.iter_batched(
                 || prepare_rodio_input(SRC_RATE, vec![], 0),
@@ -440,6 +464,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             )
         });
 
+        #[cfg(feature = "fyrox-sound")]
         group.bench_function("fyrox-fft", |b| {
             b.iter_batched(
                 || prepare_fyrox_input_fft(SRC_RATE, vec![], 0, false),
@@ -448,6 +473,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             )
         });
 
+        #[cfg(feature = "fyrox-sound")]
         group.bench_function("fyrox-fft-moving", |b| {
             b.iter_batched(
                 || prepare_fyrox_input_fft(SRC_RATE, vec![], 0, false),
@@ -456,6 +482,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             )
         });
 
+        #[cfg(feature = "oddio")]
         group.bench_function("oddio", |b| {
             b.iter_batched(
                 || prepare_oddio_input(SRC_RATE, vec![], 0),
@@ -469,6 +496,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
     for num_srcs in [1, 2, 10, 100] {
         {
             let mut group = c.benchmark_group(format!("audio/{} wav 44.1k/out 44.1k", num_srcs));
+            #[cfg(feature = "rodio")]
             group.bench_function("rodio", |b| {
                 b.iter_batched(
                     || prepare_rodio_input(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs),
@@ -477,6 +505,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft", |b| {
                 b.iter_batched(
                     || {
@@ -492,6 +521,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-hrtf", |b| {
                 b.iter_batched(
                     || {
@@ -507,6 +537,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-moving", |b| {
                 b.iter_batched(
                     || {
@@ -522,6 +553,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "oddio")]
             group.bench_function("oddio", |b| {
                 b.iter_batched(
                     || prepare_oddio_input(SRC_RATE, vec![&beep_data, &beep2_data], num_srcs),
@@ -532,6 +564,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
         }
         {
             let mut group = c.benchmark_group(format!("audio/{} wav 48k/out 44.1k", num_srcs));
+            #[cfg(feature = "rodio")]
             group.bench_function("rodio", |b| {
                 b.iter_batched(
                     || prepare_rodio_input(SRC_RATE, vec![&beep48k_data], num_srcs),
@@ -541,6 +574,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
             });
 
             // NOTE: The quality here is absolutely horrible.
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft", |b| {
                 b.iter_batched(
                     || prepare_fyrox_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
@@ -549,6 +583,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-hrtf", |b| {
                 b.iter_batched(
                     || {
@@ -564,6 +599,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-moving", |b| {
                 b.iter_batched(
                     || prepare_fyrox_input_fft(SRC_RATE, vec![&beep48k_data], num_srcs, false),
@@ -572,6 +608,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "oddio")]
             group.bench_function("oddio", |b| {
                 b.iter_batched(
                     || prepare_oddio_input(SRC_RATE, vec![&beep48k_data], num_srcs),
@@ -582,6 +619,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
         }
         {
             let mut group = c.benchmark_group(format!("audio/{} wav 44.1k/out 48k", num_srcs));
+            #[cfg(feature = "rodio")]
             group.bench_function("rodio", |b| {
                 b.iter_batched(
                     || prepare_rodio_input(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
@@ -590,6 +628,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft", |b| {
                 b.iter_batched(
                     || {
@@ -605,6 +644,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-hrtf", |b| {
                 b.iter_batched(
                     || {
@@ -620,6 +660,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "fyrox-sound")]
             group.bench_function("fyrox-fft-moving", |b| {
                 b.iter_batched(
                     || {
@@ -635,6 +676,7 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
                 )
             });
 
+            #[cfg(feature = "oddio")]
             group.bench_function("oddio", |b| {
                 b.iter_batched(
                     || prepare_oddio_input(ALT_RATE, vec![&beep_data, &beep2_data], num_srcs),
@@ -648,11 +690,13 @@ pub fn audio_mixer_wav_benchmark(c: &mut Criterion) {
 
 // Rubato FFT
 
+#[cfg(feature = "rubato")]
 fn prepare_rubato_fft(in_rate: u32, out_rate: u32) -> rubato::FftFixedOut<f32> {
     rubato::FftFixedOut::<f32>::new(in_rate as usize, out_rate as usize, BUF_SIZE, 1, 2)
         .expect("could not create FftFixedOut")
 }
 
+#[cfg(feature = "rubato")]
 fn bench_resample_rubato_fft(
     mut resampler: rubato::FftFixedOut<f32>,
     in_frames: &[(f32, f32)],
@@ -682,17 +726,18 @@ fn bench_resample_rubato_fft(
 
 // Rubato sinc
 
+#[cfg(feature = "rubato")]
 fn prepare_rubato_sinc(in_rate: u32, out_rate: u32) -> rubato::SincFixedOut<f32> {
     let resample_ratio = out_rate as f64 / in_rate as f64;
     rubato::SincFixedOut::<f32>::new(
         resample_ratio,
         2.0,
         // Copy-pasted from rubato/examples
-        rubato::InterpolationParameters {
+        rubato::SincInterpolationParameters {
             sinc_len: 128,
             f_cutoff: 0.925914648491266,
             oversampling_factor: 320,
-            interpolation: rubato::InterpolationType::Linear,
+            interpolation: rubato::SincInterpolationType::Linear,
             window: rubato::WindowFunction::Blackman2,
         },
         BUF_SIZE,
@@ -701,6 +746,7 @@ fn prepare_rubato_sinc(in_rate: u32, out_rate: u32) -> rubato::SincFixedOut<f32>
     .expect("could not create SincFixedOut")
 }
 
+#[cfg(feature = "rubato")]
 fn bench_resample_rubato_sinc(
     mut resampler: rubato::SincFixedOut<f32>,
     in_frames: &[(f32, f32)],
@@ -730,6 +776,7 @@ fn bench_resample_rubato_sinc(
 
 // Speexdsp-resampler
 
+#[cfg(feature = "speexdsp-resampler")]
 fn prepare_resample_speexdsp(
     in_rate: u32,
     out_rate: u32,
@@ -738,6 +785,7 @@ fn prepare_resample_speexdsp(
     speexdsp_resampler::State::new(2, in_rate as usize, out_rate as usize, quality).unwrap()
 }
 
+#[cfg(feature = "speexdsp-resampler")]
 fn bench_resample_speexdsp(
     mut resampler: speexdsp_resampler::State,
     in_frames: &[(f32, f32)],
@@ -763,6 +811,7 @@ fn bench_resample_speexdsp(
 
 // Libsamplerate
 
+#[cfg(feature = "samplerate")]
 fn prepare_resample_samplerate(
     in_rate: u32,
     out_rate: u32,
@@ -771,6 +820,7 @@ fn prepare_resample_samplerate(
     samplerate::Samplerate::new(quality, in_rate, out_rate, 2).unwrap()
 }
 
+#[cfg(feature = "samplerate")]
 fn bench_resample_samplerate(
     resampler: samplerate::Samplerate,
     in_frames: &[(f32, f32)],
@@ -802,6 +852,7 @@ fn bench_resample_samplerate(
 
 // SDL2 resampler
 
+#[cfg(feature = "sdl2")]
 fn prepare_resample_sdl2(in_rate: u32, out_rate: u32) -> sdl2::audio::AudioCVT {
     sdl2::audio::AudioCVT::new(
         sdl2::audio::AudioFormat::F32LSB,
@@ -814,6 +865,7 @@ fn prepare_resample_sdl2(in_rate: u32, out_rate: u32) -> sdl2::audio::AudioCVT {
     .unwrap()
 }
 
+#[cfg(feature = "sdl2")]
 fn bench_resample_sdl2(
     resampler: sdl2::audio::AudioCVT,
     in_rate: u32,
@@ -857,6 +909,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
         let mut out = vec![(0.0f32, 0.0f32); out_rate as usize * MIX_INTERVAL as usize];
 
         let mut group = c.benchmark_group("resample/in 44.1k/out 48k");
+        #[cfg(feature = "rubato")]
         group.bench_function("rubato-fft", |b| {
             b.iter_batched(
                 || prepare_rubato_fft(in_rate, out_rate),
@@ -864,6 +917,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "rubato")]
         group.bench_function("rubato-sinc", |b| {
             b.iter_batched(
                 || prepare_rubato_sinc(in_rate, out_rate),
@@ -871,6 +925,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-0", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 0),
@@ -878,6 +933,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-5", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 5),
@@ -885,6 +941,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-10", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 10),
@@ -892,6 +949,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-linear", |b| {
             b.iter_batched(
                 || {
@@ -913,6 +971,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-fastest", |b| {
             b.iter_batched(
                 || {
@@ -934,6 +993,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-medium", |b| {
             b.iter_batched(
                 || {
@@ -955,6 +1015,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-best", |b| {
             b.iter_batched(
                 || {
@@ -976,6 +1037,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "sdl2")]
         group.bench_function("sdl2", |b| {
             b.iter_batched(
                 || prepare_resample_sdl2(in_rate, out_rate),
@@ -996,6 +1058,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
         let mut out = vec![(0.0f32, 0.0f32); out_rate as usize * MIX_INTERVAL as usize];
 
         let mut group = c.benchmark_group("resample/in 48k/out 44.1k");
+        #[cfg(feature = "rubato")]
         group.bench_function("rubato-fft", |b| {
             b.iter_batched(
                 || prepare_rubato_fft(in_rate, out_rate),
@@ -1003,6 +1066,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "rubato")]
         group.bench_function("rubato-sinc", |b| {
             b.iter_batched(
                 || prepare_rubato_sinc(in_rate, out_rate),
@@ -1010,6 +1074,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-0", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 0),
@@ -1017,6 +1082,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-5", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 5),
@@ -1024,6 +1090,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "speexdsp-resampler")]
         group.bench_function("speexdsp-10", |b| {
             b.iter_batched(
                 || prepare_resample_speexdsp(in_rate, out_rate, 10),
@@ -1031,6 +1098,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-linear", |b| {
             b.iter_batched(
                 || {
@@ -1052,6 +1120,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-fastest", |b| {
             b.iter_batched(
                 || {
@@ -1073,6 +1142,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-medium", |b| {
             b.iter_batched(
                 || {
@@ -1094,6 +1164,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "samplerate")]
         group.bench_function("samplerate-sinc-best", |b| {
             b.iter_batched(
                 || {
@@ -1115,6 +1186,7 @@ pub fn audio_resampler_benchmark(c: &mut Criterion) {
                 criterion::BatchSize::SmallInput,
             )
         });
+        #[cfg(feature = "sdl2")]
         group.bench_function("sdl2", |b| {
             b.iter_batched(
                 || prepare_resample_sdl2(in_rate, out_rate),
