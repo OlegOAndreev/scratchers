@@ -36,6 +36,14 @@ pub fn mul_tile_simd_impl_8(
 ) {
     if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
         unsafe {
+            // TODO:
+            // 1. Try unrolling h loop.
+            // 2. Move m2_k load up.
+            // 3. Try using more accumulators and reuse m1 regs.
+            // 4. Try unrolling the whole loop (instead of unrolling h loop).
+            // 5. Check if packed tile works better.
+            // 6. Try writing assembly?
+
             // Split the tile in two halves: compute the second half after the first one.
             for h in 0..2 {
                 let ibh = ib + h * 4;
