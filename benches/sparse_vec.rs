@@ -1,3 +1,5 @@
+// Benchmark simple sparse vector implementations.
+
 use std::{any, ops};
 use std::collections::HashMap;
 use std::fmt::Debug;

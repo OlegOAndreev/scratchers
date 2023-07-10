@@ -1,3 +1,5 @@
+// Benchmark threadpools with simple and dependent jobs.
+
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
