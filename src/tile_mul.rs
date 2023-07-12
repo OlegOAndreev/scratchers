@@ -81,7 +81,7 @@ pub fn mul_tile_simd_impl_8(
             }
         }
     } else {
-        mul_tile_generic::<8>(m1, m2, md, ib, jb, kb, n);
+        unimplemented!();
     }
 }
 

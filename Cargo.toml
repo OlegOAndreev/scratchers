@@ -10,21 +10,25 @@ debug = true
 [profile.release]
 debug = true
 
-[[bench]]
-name = "audio"
-harness = false
+#[[bench]]
+#name = "audio"
+#harness = false
 
 [[bench]]
-name = "matrix_mul"
+name = "basic_simd"
 harness = false
 
-[[bench]]
-name = "sparse_vec"
-harness = false
-
-[[bench]]
-name = "threadpool"
-harness = false
+#[[bench]]
+#name = "matrix_mul"
+#harness = false
+#
+#[[bench]]
+#name = "sparse_vec"
+#harness = false
+#
+#[[bench]]
+#name = "threadpool"
+#harness = false
 
 [dependencies]
 anyhow = "^1.0"
@@ -35,7 +39,7 @@ env_logger = "^0.10"
 fyrox-sound = { version = "0.31.0", optional = true }
 futures = { version = "^0.3", features = ["thread-pool"], optional = true }
 gpu-allocator = { version = "^0.22", features = ["vulkan"], optional = true }
-hound = { version = "^3.5", optional = true }
+hound = "^3.5"
 libc = "^0.2"
 log = "^0.4"
 num_cpus = "^1.14"
@@ -67,15 +71,15 @@ log = "^0.4"
 [features]
 default = []
 futures = ["dep:futures"]
-fyrox-sound = ["dep:fyrox-sound", "dep:hound", "rubato"]
+fyrox-sound = ["dep:fyrox-sound", "rubato"]
 ispc = ["dep:crossbeam", "dep:rayon"]
-oddio = ["dep:hound", "dep:oddio"]
+oddio = ["dep:oddio"]
 rayon = ["dep:rayon"]
-rodio = ["dep:hound", "dep:rodio"]
-rubato = ["dep:hound", "dep:rubato"]
-samplerate = ["dep:hound", "dep:samplerate"]
-sdl2 = ["dep:hound", "dep:sdl2"]
-speexdsp-resampler = ["dep:hound", "dep:speexdsp-resampler"]
+rodio = ["dep:rodio"]
+rubato = ["dep:rubato"]
+samplerate = ["dep:samplerate"]
+sdl2 = ["dep:sdl2"]
+speexdsp-resampler = ["dep:speexdsp-resampler"]
 tokio = ["futures", "dep:tokio"]
 vulkan = ["dep:ash", "dep:gpu-allocator"]
 
