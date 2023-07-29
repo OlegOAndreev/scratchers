@@ -7,4 +7,8 @@ TODO:
 * Benchmark on Qualcomm, including unchecked/restrict bounds vs robustness
 * Write a feature-request for unchecked/restrict bounds
 
+* Add aarch64 to basic_simd
+
+* Add basic_gpu_compute
+
 * Bench music.ogg/music.mp3/music.flac against each other.
