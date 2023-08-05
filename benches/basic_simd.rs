@@ -9,32 +9,48 @@ use std::arch::x86_64::{
 use criterion::{criterion_group, criterion_main, Criterion};
 
 pub fn basic_simd_load_benchmark(c: &mut Criterion) {
-    basic_simd_load_benchmark_impl::<8>(c);
-    basic_simd_load_benchmark_impl::<16>(c);
-}
-
-fn basic_simd_load_benchmark_impl<const LOAD: usize>(c: &mut Criterion) {
     const ROWS: &[usize] = &[100, 4000, 1000000];
     for &rows in ROWS {
-        for &stride in &[LOAD, LOAD + 8] {
-            let data = vec![1.0f32; rows * stride];
-            let data_ptr = data.as_ptr();
-            let name = format!("basic simd load x{} f32 {} rows, {} stride", LOAD, rows, stride);
-            let mut group = c.benchmark_group(name);
-            // Measure throughput in elements, not in Gb.
-            group.throughput(criterion::Throughput::Elements(rows as u64 * LOAD as u64));
-            group.bench_function("scalar asm", |b| {
-                b.iter(|| scalar_load_asm::<LOAD>(data_ptr, stride, rows))
-            });
-            group.bench_function("f32x4 asm", |b| {
-                b.iter(|| f32x4_load_asm::<LOAD>(data_ptr, stride, rows))
-            });
-            if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-                group.bench_function("f32x8 asm", |b| {
-                    b.iter(|| f32x8_load_asm::<LOAD>(data_ptr, stride, rows))
-                });
-            }
-        }
+        basic_simd_load_benchmark_impl::<8>(c, rows, 8, 0);
+        basic_simd_load_benchmark_impl::<8>(c, rows, 8, 1);
+        basic_simd_load_benchmark_impl::<8>(c, rows, 16, 0);
+        basic_simd_load_benchmark_impl::<16>(c, rows, 16, 0);
+        basic_simd_load_benchmark_impl::<16>(c, rows, 16, 1);
+        basic_simd_load_benchmark_impl::<16>(c, rows, 32, 0);
+    }
+}
+
+fn basic_simd_load_benchmark_impl<const LOAD: usize>(
+    c: &mut Criterion,
+    rows: usize,
+    stride: usize,
+    align: usize,
+) {
+    let data = vec![1.0f32; rows * stride + 16];
+    let name = format!(
+        "basic simd load x{} f32 {} rows, stride {}, alignment {}",
+        LOAD, rows, stride, align
+    );
+    let mut group = c.benchmark_group(name);
+    // Measure throughput in elements, not in Gb.
+    group.throughput(criterion::Throughput::Elements(rows as u64 * LOAD as u64));
+
+    let data_ptr = data.as_ptr();
+    let aligned_ptr = unsafe {
+        data_ptr
+            .add(data_ptr.align_offset(8)) // Align for f32x8
+            .add(align)
+    };
+    group.bench_function("scalar asm", |b| {
+        b.iter(|| scalar_load_asm::<LOAD>(aligned_ptr, stride, rows))
+    });
+    group.bench_function("f32x4 asm", |b| {
+        b.iter(|| f32x4_load_asm::<LOAD>(aligned_ptr, stride, rows))
+    });
+    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
+        group.bench_function("f32x8 asm", |b| {
+            b.iter(|| f32x8_load_asm::<LOAD>(aligned_ptr, stride, rows))
+        });
     }
 }
 
@@ -405,60 +421,73 @@ fn f32x8_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usiz
 }
 
 pub fn basic_simd_store_benchmark(c: &mut Criterion) {
-    basic_simd_store_benchmark_impl::<8>(c);
-    basic_simd_store_benchmark_impl::<16>(c);
-}
-
-fn basic_simd_store_benchmark_impl<const STORE: usize>(c: &mut Criterion) {
     const ROWS: &[usize] = &[100, 4000, 1000000];
     for &rows in ROWS {
-        for &stride in &[STORE, STORE + 8] {
-            let mut data = vec![1.0f32; rows * stride];
-            let data_ptr = data.as_mut_ptr();
-            let name = format!("basic simd store x{} f32 {} rows, {} stride", STORE, rows, stride);
-            let mut group = c.benchmark_group(name);
-            // Measure throughput in elements, not in Gb.
-            group.throughput(criterion::Throughput::Elements(rows as u64 * STORE as u64));
-            group.bench_function("scalar rust", |b| {
-                data.fill(0.0);
-                b.iter(|| scalar_store::<STORE>(data_ptr, stride, rows));
-                assert_one(&data, STORE, rows, stride);
-            });
-            group.bench_function("scalar asm", |b| {
-                data.fill(0.0);
-                b.iter(|| scalar_store_asm::<STORE>(data_ptr, stride, rows));
-                assert_one(&data, STORE, rows, stride);
-            });
-            group.bench_function("f32x4 rust", |b| {
-                data.fill(0.0);
-                b.iter(|| f32x4_store::<STORE>(data_ptr, stride, rows));
-                assert_one(&data, STORE, rows, stride);
-            });
-            group.bench_function("f32x4 asm", |b| {
-                data.fill(0.0);
-                b.iter(|| f32x4_store_asm::<STORE>(data_ptr, stride, rows));
-                assert_one(&data, STORE, rows, stride);
-            });
-            if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-                group.bench_function("f32x8 rust", |b| {
-                    data.fill(0.0);
-                    b.iter(|| f32x8_store::<STORE>(data_ptr, stride, rows));
-                    assert_one(&data, STORE, rows, stride);
-                });
-                group.bench_function("f32x8 asm", |b| {
-                    data.fill(0.0);
-                    b.iter(|| f32x8_store_asm::<STORE>(data_ptr, stride, rows));
-                    assert_one(&data, STORE, rows, stride);
-                });
-            }
-        }
+        basic_simd_store_benchmark_impl::<8>(c, rows, 8, 0);
+        basic_simd_store_benchmark_impl::<8>(c, rows, 8, 1);
+        basic_simd_store_benchmark_impl::<8>(c, rows, 16, 0);
+        basic_simd_store_benchmark_impl::<16>(c, rows, 16, 0);
+        basic_simd_store_benchmark_impl::<16>(c, rows, 16, 1);
+        basic_simd_store_benchmark_impl::<16>(c, rows, 32, 0);
+    }
+}
+
+fn basic_simd_store_benchmark_impl<const STORE: usize>(
+    c: &mut Criterion,
+    rows: usize,
+    stride: usize,
+    align: usize,
+) {
+    let mut data = vec![1.0f32; rows * stride + 16];
+    let name = format!(
+        "basic simd store x{} f32 {} rows, stride {}, alignment {}",
+        STORE, rows, stride, align
+    );
+    let mut group = c.benchmark_group(name);
+    // Measure throughput in elements, not in Gb.
+    group.throughput(criterion::Throughput::Elements(rows as u64 * STORE as u64));
+
+    let data_ptr = data.as_mut_ptr();
+    let to_align = data_ptr.align_offset(8); // Align for f32x8
+    let aligned_ptr = unsafe { data_ptr.add(to_align).add(align) };
+    group.bench_function("scalar rust", |b| {
+        data.fill(0.0);
+        b.iter(|| scalar_store::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
+    group.bench_function("scalar asm", |b| {
+        data.fill(0.0);
+        b.iter(|| scalar_store_asm::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
+    group.bench_function("f32x4 rust", |b| {
+        data.fill(0.0);
+        b.iter(|| f32x4_store::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
+    group.bench_function("f32x4 asm", |b| {
+        data.fill(0.0);
+        b.iter(|| f32x4_store_asm::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
+    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
+        group.bench_function("f32x8 rust", |b| {
+            data.fill(0.0);
+            b.iter(|| f32x8_store::<STORE>(aligned_ptr, stride, rows));
+            assert_one(&data[to_align + align..], STORE, rows, stride);
+        });
+        group.bench_function("f32x8 asm", |b| {
+            data.fill(0.0);
+            b.iter(|| f32x8_store_asm::<STORE>(aligned_ptr, stride, rows));
+            assert_one(&data[to_align + align..], STORE, rows, stride);
+        });
     }
 }
 
 fn assert_one(data: &[f32], row_len: usize, rows: usize, stride: usize) {
     for i in 0..rows {
         for j in 0..row_len {
-            assert_eq!(data[i * stride + j], 1.0);
+            assert_eq!(data[i * stride + j], 1.0, "row {}, idx {}", i, j);
         }
     }
 }
@@ -909,11 +938,13 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
     assert_eq!(rows % 4, 0);
     let data_end = unsafe { data.add(stride * rows) };
     if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        let one = unsafe { _mm256_set1_ps(1.0) };
+        // Can't use _mm256_set1_ps due to vzeroupper.
+        let one = &[1.0f32];
         if STORE == 8 {
             if stride == 8 {
                 unsafe {
                     asm!(
+                    "vbroadcastss {tmp0}, [{one}]",
                     ".p2align 4",
                     "2:",
                     "vmovups ymmword ptr [{data}], {tmp0}",
@@ -924,15 +955,17 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
                     "cmp {data}, {data_end}",
                     "jb 2b",
                     "vzeroupper",
+                    one = in(reg) one.as_ptr(),
                     data = inout(reg) data => _,
                     data_end = in(reg) data_end,
-                    tmp0 = in(ymm_reg) one,
+                    tmp0 = out(ymm_reg) _,
                     options(nostack),
                     );
                 }
             } else {
                 unsafe {
                     asm!(
+                    "vbroadcastss {tmp0}, [{one}]",
                     ".p2align 4",
                     "2:",
                     "vmovups ymmword ptr [{data}], {tmp0}",
@@ -944,10 +977,11 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
                     "cmp {data}, {data_end}",
                     "jb 2b",
                     "vzeroupper",
+                    one = in(reg) one.as_ptr(),
                     data = inout(reg) data => _,
                     data_end = in(reg) data_end,
                     stride = in(reg) stride * 4,
-                    tmp0 = in(ymm_reg) one,
+                    tmp0 = out(ymm_reg) _,
                     options(nostack),
                     );
                 }
@@ -956,6 +990,7 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
             if stride == 16 {
                 unsafe {
                     asm!(
+                    "vbroadcastss {tmp0}, [{one}]",
                     ".p2align 4",
                     "2:",
                     "vmovups ymmword ptr [{data}], {tmp0}",
@@ -970,15 +1005,17 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
                     "cmp {data}, {data_end}",
                     "jb 2b",
                     "vzeroupper",
+                    one = in(reg) one.as_ptr(),
                     data = inout(reg) data => _,
                     data_end = in(reg) data_end,
-                    tmp0 = in(ymm_reg) one,
+                    tmp0 = out(ymm_reg) _,
                     options(nostack),
                     );
                 }
             } else {
                 unsafe {
                     asm!(
+                    "vbroadcastss {tmp0}, [{one}]",
                     ".p2align 4",
                     "2:",
                     "vmovups ymmword ptr [{data}], {tmp0}",
@@ -996,10 +1033,11 @@ fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
                     "cmp {data}, {data_end}",
                     "jb 2b",
                     "vzeroupper",
+                    one = in(reg) one.as_ptr(),
                     data = inout(reg) data => _,
                     data_end = in(reg) data_end,
                     stride = in(reg) stride * 4,
-                    tmp0 = in(ymm_reg) one,
+                    tmp0 = out(ymm_reg) _,
                     options(nostack),
                     );
                 }
