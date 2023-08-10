@@ -1,41 +1,30 @@
-use anyhow::{bail, Result};
-use clap::{App, ArgMatches};
+use anyhow::Result;
 
 mod android;
 
 fn main() {
     if let Err(e) = try_main() {
-        eprintln!("{}", e);
+        eprintln!("Error: {}", e);
         std::process::exit(-1);
     }
 }
 
-const ANDROID_COMMAND: &str = "android";
-const ANDROID_BUILD_COMMAND: &str = "build";
-
-fn try_main() -> Result<()> {
-    let app = App::new("xtask").about("Must be run as cargo xtask").subcommand(
-        android::android_subcommand(ANDROID_COMMAND)
-            .subcommand(android::android_build_subcommand(ANDROID_BUILD_COMMAND)),
-    );
-    let matches = app.get_matches();
-
-    if let Some(subcommand) = matches.subcommand_matches(ANDROID_COMMAND) {
-        return run_android(subcommand);
-    }
-
-    bail!("Incorrect subcommand")
+#[derive(argh::FromArgs)]
+#[argh(description = "Various cargo-related tasks")]
+struct CliArgs {
+    #[argh(subcommand)]
+    command: Commands,
 }
 
-fn run_android(matches: &ArgMatches) -> Result<()> {
-    let ndk = android::parse_subcommand(matches)?;
+#[derive(argh::FromArgs)]
+#[argh(subcommand)]
+enum Commands {
+    Android(android::Args),
+}
 
-    if let Some(subcommand_matches) = matches.subcommand_matches("build") {
-        let (arches, args) = android::parse_build_subcommand(subcommand_matches)?;
-        for arch in arches {
-            android::run_build(&ndk, arch, &args)?;
-        }
-        return Ok(());
+fn try_main() -> Result<()> {
+    let cli: CliArgs = argh::from_env();
+    match cli.command {
+        Commands::Android(a) => android::run(&a),
     }
-    bail!("Unknown subcommand for android")
 }

@@ -338,8 +338,6 @@ fn matrix_mul_multiply(c: &mut Criterion) {
 }
 
 fn init_rayon() -> usize {
-    env_logger::init();
-
     let ncpu = if let Ok(v) = std::env::var("NUM_CPUS") {
         v.parse::<usize>().unwrap()
     } else {

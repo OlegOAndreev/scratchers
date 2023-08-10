@@ -1,25 +1,28 @@
 use anyhow::{bail, Context, Result};
-use clap::{App, Arg, ArgMatches, SubCommand};
 use sha2::Digest;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr;
 use std::{env, fs};
 
 #[derive(Debug)]
-pub enum Arch {
+enum Arch {
     X86_64,
     AARCH64,
 }
 
-impl Arch {
-    pub fn from_str(s: &str) -> Result<Self> {
+impl FromStr for Arch {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
         match s.to_ascii_lowercase().as_str() {
             "x86-64" | "x86_64" => Ok(Arch::X86_64),
             "aarch64" | "armv8" | "arm64" | "arm64-v8a" => Ok(Arch::AARCH64),
             _ => bail!("Unknown arch {}", s),
         }
     }
+}
 
+impl Arch {
     pub fn to_triple(&self) -> &str {
         match self {
             Arch::X86_64 => "x86_64-linux-android",
@@ -35,77 +38,80 @@ impl Arch {
     }
 }
 
-pub struct AndroidNdk {
+#[derive(Debug)]
+#[allow(dead_code)]
+struct AndroidNdk {
     pub api_level: String,
     pub sdk_root: PathBuf,
     pub ndk_root: PathBuf,
 }
 
-const API_LEVEL_ARG: &str = "api-level";
-const SDK_ROOT_ARG: &str = "sdk-root";
-const NDK_ROOT_ARG: &str = "ndk-root";
-const ARCH_ARG: &str = "arch";
+const DEFAULT_API_LEVEL: &str = "26";
+const DEFAULT_ARCH: &str = "aarch64";
 
-const ARGS_ARG: &str = "args";
-
-pub fn android_subcommand(name: &str) -> App {
-    SubCommand::with_name(name)
-        .about("Android-related commands")
-        .arg(
-            Arg::with_name(API_LEVEL_ARG)
-                .long("--api-level")
-                .value_name("VERSION")
-                .help("Android API level")
-                .default_value("26"),
-        )
-        .arg(
-            Arg::with_name(SDK_ROOT_ARG)
-                .long("--sdk-root")
-                .value_name("PATH")
-                .help("Path to Android SDK (if not set, search in standard locations)")
-                .required(false),
-        )
-        .arg(
-            Arg::with_name(NDK_ROOT_ARG)
-                .long("--ndk-root")
-                .value_name("PATH")
-                .help("Path to Android NDK (if not set, search in standard locations)")
-                .required(false),
-        )
+#[derive(argh::FromArgs, Debug)]
+#[argh(subcommand, name = "android", description = "Android-related commands")]
+pub struct Args {
+    #[argh(subcommand)]
+    command: Commands,
+    #[argh(option, description = "android API level", default = "DEFAULT_API_LEVEL.into()")]
+    api_level: String,
+    #[argh(option, description = "path to Android SDK (if not set, search in standard locations)")]
+    sdk_root: Option<String>,
+    #[argh(option, description = "path to Android NDK (if not set, search in standard locations)")]
+    ndk_root: Option<String>,
 }
 
-pub fn android_build_subcommand(name: &str) -> App {
-    SubCommand::with_name(name)
-        .about("Sets up cross-compiling environment (including cc & cmake) and runs cargo build.")
-        .arg(Arg::with_name(ARCH_ARG)
-            .short("-a")
-            .long("--arch")
-            .value_name(ARCH_ARG)
-            .help("Architectures to build for, list of comma-separated values (if not set, aarch64)")
-            .required(false))
-        .arg(Arg::with_name(ARGS_ARG)
-            .help("Arguments to pass to cargo build")
-            .multiple(true)
-            .last(true))
+#[derive(argh::FromArgs, Debug)]
+#[argh(subcommand)]
+enum Commands {
+    Build(BuildArgs),
 }
 
-pub fn parse_subcommand(matches: &ArgMatches) -> Result<AndroidNdk> {
-    let ndk = find_ndk(
-        matches.value_of(API_LEVEL_ARG),
-        matches.value_of(SDK_ROOT_ARG),
-        matches.value_of(NDK_ROOT_ARG),
-    )?;
-    eprintln!(
-        "Using API level {}, SDK root {:?}, NDK root {:?}",
-        ndk.api_level, ndk.sdk_root, ndk.ndk_root
-    );
-    Ok(ndk)
+#[derive(argh::FromArgs, Debug)]
+#[argh(
+    subcommand,
+    name = "build",
+    description = "Set up cross-compiling environment (including cc & cmake) and run cargo build."
+)]
+struct BuildArgs {
+    #[argh(
+        option,
+        description = "architectures to build for, list of comma-separated values",
+        default = "DEFAULT_ARCH.into()"
+    )]
+    arches: String,
+    #[argh(positional, greedy)]
+    cargo_args: Vec<String>,
+}
+
+pub fn run(args: &Args) -> Result<()> {
+    match &args.command {
+        Commands::Build(build_args) => {
+            run_build(args, build_args)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_build(args: &Args, build_args: &BuildArgs) -> Result<()> {
+    let mut arches = vec![];
+    for a in build_args.arches.split(",") {
+        arches.push(Arch::from_str(a)?);
+    }
+    let ndk = find_ndk(&args.api_level, args.sdk_root.as_ref(), args.ndk_root.as_ref())?;
+    eprintln!("Using NDK {:?}, arches {:?}", ndk, arches);
+
+    for arch in arches {
+        run_build_impl(&ndk, arch, &build_args.cargo_args)?;
+    }
+    Ok(())
 }
 
 fn find_ndk(
-    arg_api_level: Option<&str>,
-    arg_sdk_root: Option<&str>,
-    arg_ndk_root: Option<&str>,
+    arg_api_level: &str,
+    arg_sdk_root: Option<&String>,
+    arg_ndk_root: Option<&String>,
 ) -> Result<AndroidNdk> {
     let sdk_root = find_sdk_root(arg_sdk_root)?;
     let ndk_root = find_ndk_root(&sdk_root, arg_ndk_root)?;
@@ -117,13 +123,13 @@ fn find_ndk(
     }
 
     Ok(AndroidNdk {
-        api_level: arg_api_level.unwrap().to_string(),
+        api_level: arg_api_level.into(),
         sdk_root,
         ndk_root,
     })
 }
 
-fn find_sdk_root(arg_sdk_root: Option<&str>) -> Result<PathBuf> {
+fn find_sdk_root(arg_sdk_root: Option<&String>) -> Result<PathBuf> {
     if let Some(root) = arg_sdk_root {
         return Ok(PathBuf::from(root));
     }
@@ -160,7 +166,7 @@ fn get_default_sdk_location() -> Result<PathBuf> {
     }
 }
 
-fn find_ndk_root(sdk_root: &Path, arg_ndk_root: Option<&str>) -> Result<PathBuf> {
+fn find_ndk_root(sdk_root: &Path, arg_ndk_root: Option<&String>) -> Result<PathBuf> {
     if let Some(root) = arg_ndk_root {
         return Ok(PathBuf::from(root));
     }
@@ -210,22 +216,7 @@ const EXE_EXT: &str = ".exe";
 #[cfg(not(target_os = "windows"))]
 const EXE_EXT: &str = "";
 
-pub fn parse_build_subcommand(matches: &ArgMatches) -> Result<(Vec<Arch>, Vec<String>)> {
-    let arches = match matches.values_of_lossy(ARCH_ARG) {
-        None => vec![Arch::AARCH64],
-        Some(value) => value
-            .iter()
-            .map(|v| v.split(','))
-            .flatten()
-            .map(|s| Arch::from_str(s))
-            .collect::<Result<Vec<_>>>()?,
-    };
-    let args = matches.values_of_lossy(ARGS_ARG).unwrap_or(vec![]);
-    eprintln!("Building for arches {:?}", arches);
-    Ok((arches, args))
-}
-
-pub fn run_build(ndk: &AndroidNdk, arch: Arch, build_args: &[String]) -> Result<()> {
+fn run_build_impl(ndk: &AndroidNdk, arch: Arch, build_args: &[String]) -> Result<()> {
     let verbose = build_args.iter().any(|v| v == "-v");
 
     let ndk_toolchain_dir = ndk

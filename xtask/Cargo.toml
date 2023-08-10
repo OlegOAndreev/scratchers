@@ -6,8 +6,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "^1.0"
-clap = "^3.2"
-dirs = "^4.0"
+argh = "^0.1"
+dirs = "^5.0"
 semver = "^1.0"
 sha2 = "^0.10"
 tempfile = "^3.2"

@@ -35,7 +35,6 @@ anyhow = "^1.0"
 ash = { version = "^0.37", optional = true }
 bytemuck = { version = "^1.12", features = ["derive"] }
 crossbeam = { version = "^0.8", optional = true }
-env_logger = "^0.10"
 fyrox-sound = { version = "0.31.0", optional = true }
 futures = { version = "^0.3", features = ["thread-pool"], optional = true }
 gpu-allocator = { version = "^0.22", features = ["vulkan"], optional = true }

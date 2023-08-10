@@ -1,10 +1,13 @@
 // Benchmark basic SIMD operations.
 
 use std::arch::asm;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use std::arch::x86_64::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps,
-    _mm256_zeroupper, _mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps,
+    _mm256_zeroupper,
 };
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{_mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -54,71 +57,150 @@ fn basic_simd_load_benchmark_impl<const LOAD: usize>(
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
     assert_eq!(rows % 2, 0);
     let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(target_arch = "x86_64") {
-        if LOAD == 8 {
-            // Use the limited number of registers because XMM6-XMM15 are considered non-volatile
-            // on Windows: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention
+    if LOAD == 8 {
+        // Use the limited number of registers because XMM6-XMM15 are considered non-volatile
+        // on Windows: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention
+        unsafe {
+            asm!(
+            ".p2align 4",
+            "2:",
+            "movss {tmp0}, dword ptr [{data}]",
+            "movss {tmp1}, dword ptr [{data} + 4]",
+            "movss {tmp2}, dword ptr [{data} + 8]",
+            "movss {tmp3}, dword ptr [{data} + 12]",
+            "movss {tmp4}, dword ptr [{data} + 16]",
+            "movss {tmp5}, dword ptr [{data} + 20]",
+            "movss {tmp0}, dword ptr [{data} + 24]",
+            "movss {tmp1}, dword ptr [{data} + 28]",
+            "add {data}, {stride}",
+            "movss {tmp2}, dword ptr [{data}]",
+            "movss {tmp3}, dword ptr [{data} + 4]",
+            "movss {tmp4}, dword ptr [{data} + 8]",
+            "movss {tmp5}, dword ptr [{data} + 12]",
+            "movss {tmp0}, dword ptr [{data} + 16]",
+            "movss {tmp1}, dword ptr [{data} + 20]",
+            "movss {tmp2}, dword ptr [{data} + 24]",
+            "movss {tmp3}, dword ptr [{data} + 28]",
+            "add {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "jb 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(xmm_reg) _,
+            tmp1 = out(xmm_reg) _,
+            tmp2 = out(xmm_reg) _,
+            tmp3 = out(xmm_reg) _,
+            tmp4 = out(xmm_reg) _,
+            tmp5 = out(xmm_reg) _,
+            options(nostack),
+            );
+        }
+    } else if LOAD == 16 {
+        unsafe {
+            asm!(
+            ".p2align 4",
+            "2:",
+            "movss {tmp0}, dword ptr [{data}]",
+            "movss {tmp1}, dword ptr [{data} + 4]",
+            "movss {tmp2}, dword ptr [{data} + 8]",
+            "movss {tmp3}, dword ptr [{data} + 12]",
+            "movss {tmp4}, dword ptr [{data} + 16]",
+            "movss {tmp5}, dword ptr [{data} + 20]",
+            "movss {tmp0}, dword ptr [{data} + 24]",
+            "movss {tmp1}, dword ptr [{data} + 28]",
+            "movss {tmp2}, dword ptr [{data} + 32]",
+            "movss {tmp3}, dword ptr [{data} + 36]",
+            "movss {tmp4}, dword ptr [{data} + 40]",
+            "movss {tmp5}, dword ptr [{data} + 44]",
+            "movss {tmp0}, dword ptr [{data} + 48]",
+            "movss {tmp1}, dword ptr [{data} + 52]",
+            "movss {tmp2}, dword ptr [{data} + 56]",
+            "movss {tmp3}, dword ptr [{data} + 60]",
+            "add {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "jb 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(xmm_reg) _,
+            tmp1 = out(xmm_reg) _,
+            tmp2 = out(xmm_reg) _,
+            tmp3 = out(xmm_reg) _,
+            tmp4 = out(xmm_reg) _,
+            tmp5 = out(xmm_reg) _,
+            options(nostack)
+            );
+        }
+    } else {
+        unimplemented!();
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    if LOAD == 8 {
+        // Use the limited number of registers because XMM6-XMM15 are considered non-volatile
+        // on Windows: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention
+        if stride == 8 {
             unsafe {
                 asm!(
                 ".p2align 4",
                 "2:",
-                "movss {tmp0}, dword ptr [{data}]",
-                "movss {tmp1}, dword ptr [{data} + 4]",
-                "movss {tmp2}, dword ptr [{data} + 8]",
-                "movss {tmp3}, dword ptr [{data} + 12]",
-                "movss {tmp4}, dword ptr [{data} + 16]",
-                "movss {tmp5}, dword ptr [{data} + 20]",
-                "movss {tmp0}, dword ptr [{data} + 24]",
-                "movss {tmp1}, dword ptr [{data} + 28]",
-                "add {data}, {stride}",
-                "movss {tmp2}, dword ptr [{data}]",
-                "movss {tmp3}, dword ptr [{data} + 4]",
-                "movss {tmp4}, dword ptr [{data} + 8]",
-                "movss {tmp5}, dword ptr [{data} + 12]",
-                "movss {tmp0}, dword ptr [{data} + 16]",
-                "movss {tmp1}, dword ptr [{data} + 20]",
-                "movss {tmp2}, dword ptr [{data} + 24]",
-                "movss {tmp3}, dword ptr [{data} + 28]",
-                "add {data}, {stride}",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
+                "movups {tmp2}, xmmword ptr [{data} + 32]",
+                "movups {tmp3}, xmmword ptr [{data} + 48]",
+                "movups {tmp4}, xmmword ptr [{data} + 64]",
+                "movups {tmp5}, xmmword ptr [{data} + 80]",
+                "movups {tmp0}, xmmword ptr [{data} + 96]",
+                "movups {tmp1}, xmmword ptr [{data} + 112]",
+                "add {data}, 128",
                 "cmp {data}, {data_end}",
                 "jb 2b",
                 data = inout(reg) data => _,
                 data_end = in(reg) data_end,
-                stride = in(reg) stride * 4,
                 tmp0 = out(xmm_reg) _,
                 tmp1 = out(xmm_reg) _,
                 tmp2 = out(xmm_reg) _,
                 tmp3 = out(xmm_reg) _,
                 tmp4 = out(xmm_reg) _,
                 tmp5 = out(xmm_reg) _,
-                options(nostack),
+                options(nostack)
                 );
             }
-        } else if LOAD == 16 {
+        } else {
             unsafe {
                 asm!(
                 ".p2align 4",
                 "2:",
-                "movss {tmp0}, dword ptr [{data}]",
-                "movss {tmp1}, dword ptr [{data} + 4]",
-                "movss {tmp2}, dword ptr [{data} + 8]",
-                "movss {tmp3}, dword ptr [{data} + 12]",
-                "movss {tmp4}, dword ptr [{data} + 16]",
-                "movss {tmp5}, dword ptr [{data} + 20]",
-                "movss {tmp0}, dword ptr [{data} + 24]",
-                "movss {tmp1}, dword ptr [{data} + 28]",
-                "movss {tmp2}, dword ptr [{data} + 32]",
-                "movss {tmp3}, dword ptr [{data} + 36]",
-                "movss {tmp4}, dword ptr [{data} + 40]",
-                "movss {tmp5}, dword ptr [{data} + 44]",
-                "movss {tmp0}, dword ptr [{data} + 48]",
-                "movss {tmp1}, dword ptr [{data} + 52]",
-                "movss {tmp2}, dword ptr [{data} + 56]",
-                "movss {tmp3}, dword ptr [{data} + 60]",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
+                "add {data}, {stride}",
+                "movups {tmp2}, xmmword ptr [{data}]",
+                "movups {tmp3}, xmmword ptr [{data} + 16]",
+                "add {data}, {stride}",
+                "movups {tmp4}, xmmword ptr [{data}]",
+                "movups {tmp5}, xmmword ptr [{data} + 16]",
+                "add {data}, {stride}",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
                 "add {data}, {stride}",
                 "cmp {data}, {data_end}",
                 "jb 2b",
@@ -134,286 +216,206 @@ fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usi
                 options(nostack)
                 );
             }
-        } else {
-            unimplemented!();
         }
-    } else if cfg!(target_arch = "aarch64") {
-        unimplemented!();
+    } else if LOAD == 16 {
+        if stride == 16 {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
+                "movups {tmp2}, xmmword ptr [{data} + 32]",
+                "movups {tmp3}, xmmword ptr [{data} + 48]",
+                "movups {tmp4}, xmmword ptr [{data} + 64]",
+                "movups {tmp5}, xmmword ptr [{data} + 80]",
+                "movups {tmp0}, xmmword ptr [{data} + 96]",
+                "movups {tmp1}, xmmword ptr [{data} + 112]",
+                "movups {tmp2}, xmmword ptr [{data} + 128]",
+                "movups {tmp3}, xmmword ptr [{data} + 144]",
+                "movups {tmp4}, xmmword ptr [{data} + 160]",
+                "movups {tmp5}, xmmword ptr [{data} + 176]",
+                "movups {tmp0}, xmmword ptr [{data} + 192]",
+                "movups {tmp1}, xmmword ptr [{data} + 208]",
+                "movups {tmp2}, xmmword ptr [{data} + 224]",
+                "movups {tmp3}, xmmword ptr [{data} + 240]",
+                "add {data}, 256",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(xmm_reg) _,
+                tmp1 = out(xmm_reg) _,
+                tmp2 = out(xmm_reg) _,
+                tmp3 = out(xmm_reg) _,
+                tmp4 = out(xmm_reg) _,
+                tmp5 = out(xmm_reg) _,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
+                "movups {tmp2}, xmmword ptr [{data} + 32]",
+                "movups {tmp3}, xmmword ptr [{data} + 48]",
+                "add {data}, {stride}",
+                "movups {tmp4}, xmmword ptr [{data}]",
+                "movups {tmp5}, xmmword ptr [{data} + 16]",
+                "movups {tmp0}, xmmword ptr [{data} + 32]",
+                "movups {tmp1}, xmmword ptr [{data} + 48]",
+                "add {data}, {stride}",
+                "movups {tmp2}, xmmword ptr [{data}]",
+                "movups {tmp3}, xmmword ptr [{data} + 16]",
+                "movups {tmp4}, xmmword ptr [{data} + 32]",
+                "movups {tmp5}, xmmword ptr [{data} + 48]",
+                "add {data}, {stride}",
+                "movups {tmp0}, xmmword ptr [{data}]",
+                "movups {tmp1}, xmmword ptr [{data} + 16]",
+                "movups {tmp2}, xmmword ptr [{data} + 32]",
+                "movups {tmp3}, xmmword ptr [{data} + 48]",
+                "add {data}, {stride}",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(xmm_reg) _,
+                tmp1 = out(xmm_reg) _,
+                tmp2 = out(xmm_reg) _,
+                tmp3 = out(xmm_reg) _,
+                tmp4 = out(xmm_reg) _,
+                tmp5 = out(xmm_reg) _,
+                options(nostack)
+                );
+            }
+        }
     } else {
         unimplemented!();
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
-    assert_eq!(rows % 4, 0);
-    let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(target_arch = "x86_64") {
-        if LOAD == 8 {
-            // Use the limited number of registers because XMM6-XMM15 are considered non-volatile
-            // on Windows: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention
-            if stride == 8 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "movups {tmp2}, xmmword ptr [{data} + 32]",
-                    "movups {tmp3}, xmmword ptr [{data} + 48]",
-                    "movups {tmp4}, xmmword ptr [{data} + 64]",
-                    "movups {tmp5}, xmmword ptr [{data} + 80]",
-                    "movups {tmp0}, xmmword ptr [{data} + 96]",
-                    "movups {tmp1}, xmmword ptr [{data} + 112]",
-                    "add {data}, 128",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(xmm_reg) _,
-                    tmp1 = out(xmm_reg) _,
-                    tmp2 = out(xmm_reg) _,
-                    tmp3 = out(xmm_reg) _,
-                    tmp4 = out(xmm_reg) _,
-                    tmp5 = out(xmm_reg) _,
-                    options(nostack)
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "add {data}, {stride}",
-                    "movups {tmp2}, xmmword ptr [{data}]",
-                    "movups {tmp3}, xmmword ptr [{data} + 16]",
-                    "add {data}, {stride}",
-                    "movups {tmp4}, xmmword ptr [{data}]",
-                    "movups {tmp5}, xmmword ptr [{data} + 16]",
-                    "add {data}, {stride}",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(xmm_reg) _,
-                    tmp1 = out(xmm_reg) _,
-                    tmp2 = out(xmm_reg) _,
-                    tmp3 = out(xmm_reg) _,
-                    tmp4 = out(xmm_reg) _,
-                    tmp5 = out(xmm_reg) _,
-                    options(nostack)
-                    );
-                }
-            }
-        } else if LOAD == 16 {
-            if stride == 16 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "movups {tmp2}, xmmword ptr [{data} + 32]",
-                    "movups {tmp3}, xmmword ptr [{data} + 48]",
-                    "movups {tmp4}, xmmword ptr [{data} + 64]",
-                    "movups {tmp5}, xmmword ptr [{data} + 80]",
-                    "movups {tmp0}, xmmword ptr [{data} + 96]",
-                    "movups {tmp1}, xmmword ptr [{data} + 112]",
-                    "movups {tmp2}, xmmword ptr [{data} + 128]",
-                    "movups {tmp3}, xmmword ptr [{data} + 144]",
-                    "movups {tmp4}, xmmword ptr [{data} + 160]",
-                    "movups {tmp5}, xmmword ptr [{data} + 176]",
-                    "movups {tmp0}, xmmword ptr [{data} + 192]",
-                    "movups {tmp1}, xmmword ptr [{data} + 208]",
-                    "movups {tmp2}, xmmword ptr [{data} + 224]",
-                    "movups {tmp3}, xmmword ptr [{data} + 240]",
-                    "add {data}, 256",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(xmm_reg) _,
-                    tmp1 = out(xmm_reg) _,
-                    tmp2 = out(xmm_reg) _,
-                    tmp3 = out(xmm_reg) _,
-                    tmp4 = out(xmm_reg) _,
-                    tmp5 = out(xmm_reg) _,
-                    options(nostack)
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "movups {tmp2}, xmmword ptr [{data} + 32]",
-                    "movups {tmp3}, xmmword ptr [{data} + 48]",
-                    "add {data}, {stride}",
-                    "movups {tmp4}, xmmword ptr [{data}]",
-                    "movups {tmp5}, xmmword ptr [{data} + 16]",
-                    "movups {tmp0}, xmmword ptr [{data} + 32]",
-                    "movups {tmp1}, xmmword ptr [{data} + 48]",
-                    "add {data}, {stride}",
-                    "movups {tmp2}, xmmword ptr [{data}]",
-                    "movups {tmp3}, xmmword ptr [{data} + 16]",
-                    "movups {tmp4}, xmmword ptr [{data} + 32]",
-                    "movups {tmp5}, xmmword ptr [{data} + 48]",
-                    "add {data}, {stride}",
-                    "movups {tmp0}, xmmword ptr [{data}]",
-                    "movups {tmp1}, xmmword ptr [{data} + 16]",
-                    "movups {tmp2}, xmmword ptr [{data} + 32]",
-                    "movups {tmp3}, xmmword ptr [{data} + 48]",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(xmm_reg) _,
-                    tmp1 = out(xmm_reg) _,
-                    tmp2 = out(xmm_reg) _,
-                    tmp3 = out(xmm_reg) _,
-                    tmp4 = out(xmm_reg) _,
-                    tmp5 = out(xmm_reg) _,
-                    options(nostack)
-                    );
-                }
-            }
-        } else {
-            unimplemented!();
-        }
-    } else if cfg!(target_arch = "aarch64") {
-        unimplemented!();
-    } else {
-        unimplemented!();
-    }
-}
+fn f32x8_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
 
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
     assert_eq!(rows % 4, 0);
     let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        if LOAD == 8 {
-            if stride == 8 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "vmovups {tmp0}, ymmword ptr [{data}]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + 32]",
-                    "vmovups {tmp2}, ymmword ptr [{data} + 64]",
-                    "vmovups {tmp3}, ymmword ptr [{data} + 96]",
-                    "add {data}, 128",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(ymm_reg) _,
-                    tmp1 = out(ymm_reg) _,
-                    tmp2 = out(ymm_reg) _,
-                    tmp3 = out(ymm_reg) _,
-                    options(nostack)
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "vmovups {tmp0}, ymmword ptr [{data}]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + {stride}]",
-                    "lea {data}, [{data} + {stride} * 2]",
-                    "vmovups {tmp2}, ymmword ptr [{data}]",
-                    "vmovups {tmp3}, ymmword ptr [{data} + {stride}]",
-                    "lea {data}, [{data} + {stride} * 2]",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(ymm_reg) _,
-                    tmp1 = out(ymm_reg) _,
-                    tmp2 = out(ymm_reg) _,
-                    tmp3 = out(ymm_reg) _,
-                    options(nostack)
-                    );
-                }
-            }
-        } else if LOAD == 16 {
-            if stride == 16 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "vmovups {tmp0}, ymmword ptr [{data}]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + 32]",
-                    "vmovups {tmp2}, ymmword ptr [{data} + 64]",
-                    "vmovups {tmp3}, ymmword ptr [{data} + 96]",
-                    "vmovups {tmp4}, ymmword ptr [{data} + 128]",
-                    "vmovups {tmp5}, ymmword ptr [{data} + 160]",
-                    "vmovups {tmp0}, ymmword ptr [{data} + 192]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + 224]",
-                    "add {data}, 256",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(ymm_reg) _,
-                    tmp1 = out(ymm_reg) _,
-                    tmp2 = out(ymm_reg) _,
-                    tmp3 = out(ymm_reg) _,
-                    tmp4 = out(ymm_reg) _,
-                    tmp5 = out(ymm_reg) _,
-                    options(nostack)
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "vmovups {tmp0}, ymmword ptr [{data}]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + 32]",
-                    "add {data}, {stride}",
-                    "vmovups {tmp2}, ymmword ptr [{data}]",
-                    "vmovups {tmp3}, ymmword ptr [{data} + 32]",
-                    "add {data}, {stride}",
-                    "vmovups {tmp4}, ymmword ptr [{data}]",
-                    "vmovups {tmp5}, ymmword ptr [{data} + 32]",
-                    "add {data}, {stride}",
-                    "vmovups {tmp0}, ymmword ptr [{data}]",
-                    "vmovups {tmp1}, ymmword ptr [{data} + 32]",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(ymm_reg) _,
-                    tmp1 = out(ymm_reg) _,
-                    tmp2 = out(ymm_reg) _,
-                    tmp3 = out(ymm_reg) _,
-                    tmp4 = out(ymm_reg) _,
-                    tmp5 = out(ymm_reg) _,
-                    options(nostack)
-                    );
-                }
+    if LOAD == 8 {
+        if stride == 8 {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "vmovups {tmp0}, ymmword ptr [{data}]",
+                "vmovups {tmp1}, ymmword ptr [{data} + 32]",
+                "vmovups {tmp2}, ymmword ptr [{data} + 64]",
+                "vmovups {tmp3}, ymmword ptr [{data} + 96]",
+                "add {data}, 128",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(ymm_reg) _,
+                tmp1 = out(ymm_reg) _,
+                tmp2 = out(ymm_reg) _,
+                tmp3 = out(ymm_reg) _,
+                options(nostack)
+                );
             }
         } else {
-            unimplemented!();
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "vmovups {tmp0}, ymmword ptr [{data}]",
+                "vmovups {tmp1}, ymmword ptr [{data} + {stride}]",
+                "lea {data}, [{data} + {stride} * 2]",
+                "vmovups {tmp2}, ymmword ptr [{data}]",
+                "vmovups {tmp3}, ymmword ptr [{data} + {stride}]",
+                "lea {data}, [{data} + {stride} * 2]",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(ymm_reg) _,
+                tmp1 = out(ymm_reg) _,
+                tmp2 = out(ymm_reg) _,
+                tmp3 = out(ymm_reg) _,
+                options(nostack)
+                );
+            }
+        }
+    } else if LOAD == 16 {
+        if stride == 16 {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "vmovups {tmp0}, ymmword ptr [{data}]",
+                "vmovups {tmp1}, ymmword ptr [{data} + 32]",
+                "vmovups {tmp2}, ymmword ptr [{data} + 64]",
+                "vmovups {tmp3}, ymmword ptr [{data} + 96]",
+                "vmovups {tmp4}, ymmword ptr [{data} + 128]",
+                "vmovups {tmp5}, ymmword ptr [{data} + 160]",
+                "vmovups {tmp0}, ymmword ptr [{data} + 192]",
+                "vmovups {tmp1}, ymmword ptr [{data} + 224]",
+                "add {data}, 256",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(ymm_reg) _,
+                tmp1 = out(ymm_reg) _,
+                tmp2 = out(ymm_reg) _,
+                tmp3 = out(ymm_reg) _,
+                tmp4 = out(ymm_reg) _,
+                tmp5 = out(ymm_reg) _,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "vmovups {tmp0}, ymmword ptr [{data}]",
+                "vmovups {tmp1}, ymmword ptr [{data} + 32]",
+                "add {data}, {stride}",
+                "vmovups {tmp2}, ymmword ptr [{data}]",
+                "vmovups {tmp3}, ymmword ptr [{data} + 32]",
+                "add {data}, {stride}",
+                "vmovups {tmp4}, ymmword ptr [{data}]",
+                "vmovups {tmp5}, ymmword ptr [{data} + 32]",
+                "add {data}, {stride}",
+                "vmovups {tmp0}, ymmword ptr [{data}]",
+                "vmovups {tmp1}, ymmword ptr [{data} + 32]",
+                "add {data}, {stride}",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(ymm_reg) _,
+                tmp1 = out(ymm_reg) _,
+                tmp2 = out(ymm_reg) _,
+                tmp3 = out(ymm_reg) _,
+                tmp4 = out(ymm_reg) _,
+                tmp5 = out(ymm_reg) _,
+                options(nostack)
+                );
+            }
         }
     } else {
         unimplemented!();
@@ -547,34 +549,231 @@ fn scalar_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) 
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
     assert_eq!(rows % 2, 0);
     let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(target_arch = "x86_64") {
-        let one = unsafe { _mm_set1_ps(1.0) };
-        if STORE == 8 {
+    let one = unsafe { _mm_set1_ps(1.0) };
+    if STORE == 8 {
+        unsafe {
+            asm!(
+            ".p2align 4",
+            "2:",
+            "movss dword ptr [{data}], {tmp0}",
+            "movss dword ptr [{data} + 4], {tmp0}",
+            "movss dword ptr [{data} + 8], {tmp0}",
+            "movss dword ptr [{data} + 12], {tmp0}",
+            "movss dword ptr [{data} + 16], {tmp0}",
+            "movss dword ptr [{data} + 20], {tmp0}",
+            "movss dword ptr [{data} + 24], {tmp0}",
+            "movss dword ptr [{data} + 28], {tmp0}",
+            "add {data}, {stride}",
+            "movss dword ptr [{data}], {tmp0}",
+            "movss dword ptr [{data} + 4], {tmp0}",
+            "movss dword ptr [{data} + 8], {tmp0}",
+            "movss dword ptr [{data} + 12], {tmp0}",
+            "movss dword ptr [{data} + 16], {tmp0}",
+            "movss dword ptr [{data} + 20], {tmp0}",
+            "movss dword ptr [{data} + 24], {tmp0}",
+            "movss dword ptr [{data} + 28], {tmp0}",
+            "add {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "jb 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = in(xmm_reg) one,
+            options(nostack),
+            );
+        }
+    } else if STORE == 16 {
+        unsafe {
+            asm!(
+            ".p2align 4",
+            "2:",
+            "movss dword ptr [{data}], {tmp0}",
+            "movss dword ptr [{data} + 4], {tmp0}",
+            "movss dword ptr [{data} + 8], {tmp0}",
+            "movss dword ptr [{data} + 12], {tmp0}",
+            "movss dword ptr [{data} + 16], {tmp0}",
+            "movss dword ptr [{data} + 20], {tmp0}",
+            "movss dword ptr [{data} + 24], {tmp0}",
+            "movss dword ptr [{data} + 28], {tmp0}",
+            "movss dword ptr [{data} + 32], {tmp0}",
+            "movss dword ptr [{data} + 36], {tmp0}",
+            "movss dword ptr [{data} + 40], {tmp0}",
+            "movss dword ptr [{data} + 44], {tmp0}",
+            "movss dword ptr [{data} + 48], {tmp0}",
+            "movss dword ptr [{data} + 52], {tmp0}",
+            "movss dword ptr [{data} + 56], {tmp0}",
+            "movss dword ptr [{data} + 60], {tmp0}",
+            "add {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "jb 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = in(xmm_reg) one,
+            options(nostack)
+            );
+        }
+    } else {
+        unimplemented!();
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let one = unsafe { _mm_set1_ps(1.0) };
+    if STORE == 8 {
+        if stride == 8 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 8);
+                    _mm_storeu_ps(ptr, one);
+                    _mm_storeu_ps(ptr.add(4), one);
+                    _mm_storeu_ps(ptr.add(8), one);
+                    _mm_storeu_ps(ptr.add(12), one);
+                    _mm_storeu_ps(ptr.add(16), one);
+                    _mm_storeu_ps(ptr.add(20), one);
+                    _mm_storeu_ps(ptr.add(24), one);
+                    _mm_storeu_ps(ptr.add(28), one);
+                    i += 4;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    _mm_storeu_ps(ptr, one);
+                    _mm_storeu_ps(ptr.add(4), one);
+                    _mm_storeu_ps(ptr.add(stride), one);
+                    _mm_storeu_ps(ptr.add(stride + 4), one);
+                    _mm_storeu_ps(ptr.add(stride * 2), one);
+                    _mm_storeu_ps(ptr.add(stride * 2 + 4), one);
+                    _mm_storeu_ps(ptr.add(stride * 3), one);
+                    _mm_storeu_ps(ptr.add(stride * 3 + 4), one);
+                    i += 4;
+                }
+            }
+        }
+    } else if STORE == 16 {
+        if stride == 16 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 16);
+                    _mm_storeu_ps(ptr, one);
+                    _mm_storeu_ps(ptr.add(4), one);
+                    _mm_storeu_ps(ptr.add(8), one);
+                    _mm_storeu_ps(ptr.add(12), one);
+                    _mm_storeu_ps(ptr.add(16), one);
+                    _mm_storeu_ps(ptr.add(20), one);
+                    _mm_storeu_ps(ptr.add(24), one);
+                    _mm_storeu_ps(ptr.add(28), one);
+                    _mm_storeu_ps(ptr.add(32), one);
+                    _mm_storeu_ps(ptr.add(36), one);
+                    _mm_storeu_ps(ptr.add(40), one);
+                    _mm_storeu_ps(ptr.add(44), one);
+                    _mm_storeu_ps(ptr.add(48), one);
+                    _mm_storeu_ps(ptr.add(52), one);
+                    _mm_storeu_ps(ptr.add(56), one);
+                    _mm_storeu_ps(ptr.add(60), one);
+                    i += 4;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    _mm_storeu_ps(ptr, one);
+                    _mm_storeu_ps(ptr.add(4), one);
+                    _mm_storeu_ps(ptr.add(8), one);
+                    _mm_storeu_ps(ptr.add(12), one);
+                    _mm_storeu_ps(ptr.add(stride), one);
+                    _mm_storeu_ps(ptr.add(stride + 4), one);
+                    _mm_storeu_ps(ptr.add(stride + 8), one);
+                    _mm_storeu_ps(ptr.add(stride + 12), one);
+                    _mm_storeu_ps(ptr.add(stride * 2), one);
+                    _mm_storeu_ps(ptr.add(stride * 2 + 4), one);
+                    _mm_storeu_ps(ptr.add(stride * 2 + 8), one);
+                    _mm_storeu_ps(ptr.add(stride * 2 + 12), one);
+                    _mm_storeu_ps(ptr.add(stride * 3), one);
+                    _mm_storeu_ps(ptr.add(stride * 3 + 4), one);
+                    _mm_storeu_ps(ptr.add(stride * 3 + 8), one);
+                    _mm_storeu_ps(ptr.add(stride * 3 + 12), one);
+                    i += 4;
+                }
+            }
+        }
+    } else {
+        unimplemented!();
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    let one = unsafe { _mm_set1_ps(1.0) };
+    if STORE == 8 {
+        if stride == 8 {
             unsafe {
                 asm!(
                 ".p2align 4",
                 "2:",
-                "movss dword ptr [{data}], {tmp0}",
-                "movss dword ptr [{data} + 4], {tmp0}",
-                "movss dword ptr [{data} + 8], {tmp0}",
-                "movss dword ptr [{data} + 12], {tmp0}",
-                "movss dword ptr [{data} + 16], {tmp0}",
-                "movss dword ptr [{data} + 20], {tmp0}",
-                "movss dword ptr [{data} + 24], {tmp0}",
-                "movss dword ptr [{data} + 28], {tmp0}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
+                "movups xmmword ptr [{data} + 64], {tmp0}",
+                "movups xmmword ptr [{data} + 80], {tmp0}",
+                "movups xmmword ptr [{data} + 96], {tmp0}",
+                "movups xmmword ptr [{data} + 112], {tmp0}",
+                "add {data}, 128",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = in(xmm_reg) one,
+                options(nostack),
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
                 "add {data}, {stride}",
-                "movss dword ptr [{data}], {tmp0}",
-                "movss dword ptr [{data} + 4], {tmp0}",
-                "movss dword ptr [{data} + 8], {tmp0}",
-                "movss dword ptr [{data} + 12], {tmp0}",
-                "movss dword ptr [{data} + 16], {tmp0}",
-                "movss dword ptr [{data} + 20], {tmp0}",
-                "movss dword ptr [{data} + 24], {tmp0}",
-                "movss dword ptr [{data} + 28], {tmp0}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "add {data}, {stride}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "add {data}, {stride}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
                 "add {data}, {stride}",
                 "cmp {data}, {data_end}",
                 "jb 2b",
@@ -585,27 +784,62 @@ fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usi
                 options(nostack),
                 );
             }
-        } else if STORE == 16 {
+        }
+    } else if STORE == 16 {
+        if stride == 16 {
             unsafe {
                 asm!(
                 ".p2align 4",
                 "2:",
-                "movss dword ptr [{data}], {tmp0}",
-                "movss dword ptr [{data} + 4], {tmp0}",
-                "movss dword ptr [{data} + 8], {tmp0}",
-                "movss dword ptr [{data} + 12], {tmp0}",
-                "movss dword ptr [{data} + 16], {tmp0}",
-                "movss dword ptr [{data} + 20], {tmp0}",
-                "movss dword ptr [{data} + 24], {tmp0}",
-                "movss dword ptr [{data} + 28], {tmp0}",
-                "movss dword ptr [{data} + 32], {tmp0}",
-                "movss dword ptr [{data} + 36], {tmp0}",
-                "movss dword ptr [{data} + 40], {tmp0}",
-                "movss dword ptr [{data} + 44], {tmp0}",
-                "movss dword ptr [{data} + 48], {tmp0}",
-                "movss dword ptr [{data} + 52], {tmp0}",
-                "movss dword ptr [{data} + 56], {tmp0}",
-                "movss dword ptr [{data} + 60], {tmp0}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
+                "movups xmmword ptr [{data} + 64], {tmp0}",
+                "movups xmmword ptr [{data} + 80], {tmp0}",
+                "movups xmmword ptr [{data} + 96], {tmp0}",
+                "movups xmmword ptr [{data} + 112], {tmp0}",
+                "movups xmmword ptr [{data} + 128], {tmp0}",
+                "movups xmmword ptr [{data} + 144], {tmp0}",
+                "movups xmmword ptr [{data} + 160], {tmp0}",
+                "movups xmmword ptr [{data} + 176], {tmp0}",
+                "movups xmmword ptr [{data} + 192], {tmp0}",
+                "movups xmmword ptr [{data} + 208], {tmp0}",
+                "movups xmmword ptr [{data} + 224], {tmp0}",
+                "movups xmmword ptr [{data} + 240], {tmp0}",
+                "add {data}, 256",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = in(xmm_reg) one,
+                options(nostack),
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 4",
+                "2:",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
+                "add {data}, {stride}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
+                "add {data}, {stride}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
+                "add {data}, {stride}",
+                "movups xmmword ptr [{data}], {tmp0}",
+                "movups xmmword ptr [{data} + 16], {tmp0}",
+                "movups xmmword ptr [{data} + 32], {tmp0}",
+                "movups xmmword ptr [{data} + 48], {tmp0}",
                 "add {data}, {stride}",
                 "cmp {data}, {data_end}",
                 "jb 2b",
@@ -613,437 +847,204 @@ fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usi
                 data_end = in(reg) data_end,
                 stride = in(reg) stride * 4,
                 tmp0 = in(xmm_reg) one,
-                options(nostack)
+                options(nostack),
                 );
             }
-        } else {
-            unimplemented!();
         }
-    } else if cfg!(target_arch = "aarch64") {
-        unimplemented!();
     } else {
         unimplemented!();
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
-    assert_eq!(rows % 4, 0);
-    if cfg!(target_arch = "x86_64") {
-        let one = unsafe { _mm_set1_ps(1.0) };
-        if STORE == 8 {
-            if stride == 8 {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * 8);
-                        _mm_storeu_ps(ptr, one);
-                        _mm_storeu_ps(ptr.add(4), one);
-                        _mm_storeu_ps(ptr.add(8), one);
-                        _mm_storeu_ps(ptr.add(12), one);
-                        _mm_storeu_ps(ptr.add(16), one);
-                        _mm_storeu_ps(ptr.add(20), one);
-                        _mm_storeu_ps(ptr.add(24), one);
-                        _mm_storeu_ps(ptr.add(28), one);
-                        i += 4;
-                    }
-                }
-            } else {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * stride);
-                        _mm_storeu_ps(ptr, one);
-                        _mm_storeu_ps(ptr.add(4), one);
-                        _mm_storeu_ps(ptr.add(stride), one);
-                        _mm_storeu_ps(ptr.add(stride + 4), one);
-                        _mm_storeu_ps(ptr.add(stride * 2), one);
-                        _mm_storeu_ps(ptr.add(stride * 2 + 4), one);
-                        _mm_storeu_ps(ptr.add(stride * 3), one);
-                        _mm_storeu_ps(ptr.add(stride * 3 + 4), one);
-                        i += 4;
-                    }
-                }
-            }
-        } else if STORE == 16 {
-            if stride == 16 {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * 16);
-                        _mm_storeu_ps(ptr, one);
-                        _mm_storeu_ps(ptr.add(4), one);
-                        _mm_storeu_ps(ptr.add(8), one);
-                        _mm_storeu_ps(ptr.add(12), one);
-                        _mm_storeu_ps(ptr.add(16), one);
-                        _mm_storeu_ps(ptr.add(20), one);
-                        _mm_storeu_ps(ptr.add(24), one);
-                        _mm_storeu_ps(ptr.add(28), one);
-                        _mm_storeu_ps(ptr.add(32), one);
-                        _mm_storeu_ps(ptr.add(36), one);
-                        _mm_storeu_ps(ptr.add(40), one);
-                        _mm_storeu_ps(ptr.add(44), one);
-                        _mm_storeu_ps(ptr.add(48), one);
-                        _mm_storeu_ps(ptr.add(52), one);
-                        _mm_storeu_ps(ptr.add(56), one);
-                        _mm_storeu_ps(ptr.add(60), one);
-                        i += 4;
-                    }
-                }
-            } else {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * stride);
-                        _mm_storeu_ps(ptr, one);
-                        _mm_storeu_ps(ptr.add(4), one);
-                        _mm_storeu_ps(ptr.add(8), one);
-                        _mm_storeu_ps(ptr.add(12), one);
-                        _mm_storeu_ps(ptr.add(stride), one);
-                        _mm_storeu_ps(ptr.add(stride + 4), one);
-                        _mm_storeu_ps(ptr.add(stride + 8), one);
-                        _mm_storeu_ps(ptr.add(stride + 12), one);
-                        _mm_storeu_ps(ptr.add(stride * 2), one);
-                        _mm_storeu_ps(ptr.add(stride * 2 + 4), one);
-                        _mm_storeu_ps(ptr.add(stride * 2 + 8), one);
-                        _mm_storeu_ps(ptr.add(stride * 2 + 12), one);
-                        _mm_storeu_ps(ptr.add(stride * 3), one);
-                        _mm_storeu_ps(ptr.add(stride * 3 + 4), one);
-                        _mm_storeu_ps(ptr.add(stride * 3 + 8), one);
-                        _mm_storeu_ps(ptr.add(stride * 3 + 12), one);
-                        i += 4;
-                    }
-                }
-            }
-        } else {
-            unimplemented!();
-        }
-    } else if cfg!(target_arch = "aarch64") {
-        unimplemented!();
-    } else {
-        unimplemented!();
-    }
-}
+fn f32x8_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
 
-#[inline(always)]
-fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
-    assert_eq!(rows % 4, 0);
-    let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(target_arch = "x86_64") {
-        let one = unsafe { _mm_set1_ps(1.0) };
-        if STORE == 8 {
-            if stride == 8 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "movups xmmword ptr [{data} + 64], {tmp0}",
-                    "movups xmmword ptr [{data} + 80], {tmp0}",
-                    "movups xmmword ptr [{data} + 96], {tmp0}",
-                    "movups xmmword ptr [{data} + 112], {tmp0}",
-                    "add {data}, 128",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = in(xmm_reg) one,
-                    options(nostack),
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = in(xmm_reg) one,
-                    options(nostack),
-                    );
-                }
-            }
-        } else if STORE == 16 {
-            if stride == 16 {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "movups xmmword ptr [{data} + 64], {tmp0}",
-                    "movups xmmword ptr [{data} + 80], {tmp0}",
-                    "movups xmmword ptr [{data} + 96], {tmp0}",
-                    "movups xmmword ptr [{data} + 112], {tmp0}",
-                    "movups xmmword ptr [{data} + 128], {tmp0}",
-                    "movups xmmword ptr [{data} + 144], {tmp0}",
-                    "movups xmmword ptr [{data} + 160], {tmp0}",
-                    "movups xmmword ptr [{data} + 176], {tmp0}",
-                    "movups xmmword ptr [{data} + 192], {tmp0}",
-                    "movups xmmword ptr [{data} + 208], {tmp0}",
-                    "movups xmmword ptr [{data} + 224], {tmp0}",
-                    "movups xmmword ptr [{data} + 240], {tmp0}",
-                    "add {data}, 256",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = in(xmm_reg) one,
-                    options(nostack),
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    ".p2align 4",
-                    "2:",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "add {data}, {stride}",
-                    "movups xmmword ptr [{data}], {tmp0}",
-                    "movups xmmword ptr [{data} + 16], {tmp0}",
-                    "movups xmmword ptr [{data} + 32], {tmp0}",
-                    "movups xmmword ptr [{data} + 48], {tmp0}",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = in(xmm_reg) one,
-                    options(nostack),
-                    );
-                }
-            }
-        } else {
-            unimplemented!();
-        }
-    } else if cfg!(target_arch = "aarch64") {
-        unimplemented!();
-    } else {
-        unimplemented!();
-    }
-}
-
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
     assert_eq!(rows % 4, 0);
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        let one = unsafe { _mm256_set1_ps(1.0) };
-        if STORE == 8 {
-            if stride == 8 {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * 8);
-                        _mm256_storeu_ps(ptr, one);
-                        _mm256_storeu_ps(ptr.add(8), one);
-                        _mm256_storeu_ps(ptr.add(16), one);
-                        _mm256_storeu_ps(ptr.add(24), one);
-                        i += 4;
-                    }
-                }
-            } else {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * stride);
-                        _mm256_storeu_ps(ptr, one);
-                        _mm256_storeu_ps(ptr.add(stride), one);
-                        _mm256_storeu_ps(ptr.add(stride * 2), one);
-                        _mm256_storeu_ps(ptr.add(stride * 3), one);
-                        i += 4;
-                    }
-                }
-            }
-        } else if STORE == 16 {
-            if stride == 16 {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * 16);
-                        _mm256_storeu_ps(ptr, one);
-                        _mm256_storeu_ps(ptr.add(8), one);
-                        _mm256_storeu_ps(ptr.add(16), one);
-                        _mm256_storeu_ps(ptr.add(24), one);
-                        _mm256_storeu_ps(ptr.add(32), one);
-                        _mm256_storeu_ps(ptr.add(40), one);
-                        _mm256_storeu_ps(ptr.add(48), one);
-                        _mm256_storeu_ps(ptr.add(56), one);
-                        i += 4;
-                    }
-                }
-            } else {
-                let mut i = 0;
-                while i < rows {
-                    unsafe {
-                        let ptr = data.add(i * stride);
-                        _mm256_storeu_ps(ptr, one);
-                        _mm256_storeu_ps(ptr.add(8), one);
-                        _mm256_storeu_ps(ptr.add(stride), one);
-                        _mm256_storeu_ps(ptr.add(stride + 8), one);
-                        _mm256_storeu_ps(ptr.add(stride * 2), one);
-                        _mm256_storeu_ps(ptr.add(stride * 2 + 8), one);
-                        _mm256_storeu_ps(ptr.add(stride * 3), one);
-                        _mm256_storeu_ps(ptr.add(stride * 3 + 8), one);
-                        i += 4;
-                    }
+    let one = unsafe { _mm256_set1_ps(1.0) };
+    if STORE == 8 {
+        if stride == 8 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 8);
+                    _mm256_storeu_ps(ptr, one);
+                    _mm256_storeu_ps(ptr.add(8), one);
+                    _mm256_storeu_ps(ptr.add(16), one);
+                    _mm256_storeu_ps(ptr.add(24), one);
+                    i += 4;
                 }
             }
         } else {
-            unimplemented!();
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    _mm256_storeu_ps(ptr, one);
+                    _mm256_storeu_ps(ptr.add(stride), one);
+                    _mm256_storeu_ps(ptr.add(stride * 2), one);
+                    _mm256_storeu_ps(ptr.add(stride * 3), one);
+                    i += 4;
+                }
+            }
         }
-        unsafe {
-            _mm256_zeroupper();
+    } else if STORE == 16 {
+        if stride == 16 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 16);
+                    _mm256_storeu_ps(ptr, one);
+                    _mm256_storeu_ps(ptr.add(8), one);
+                    _mm256_storeu_ps(ptr.add(16), one);
+                    _mm256_storeu_ps(ptr.add(24), one);
+                    _mm256_storeu_ps(ptr.add(32), one);
+                    _mm256_storeu_ps(ptr.add(40), one);
+                    _mm256_storeu_ps(ptr.add(48), one);
+                    _mm256_storeu_ps(ptr.add(56), one);
+                    i += 4;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    _mm256_storeu_ps(ptr, one);
+                    _mm256_storeu_ps(ptr.add(8), one);
+                    _mm256_storeu_ps(ptr.add(stride), one);
+                    _mm256_storeu_ps(ptr.add(stride + 8), one);
+                    _mm256_storeu_ps(ptr.add(stride * 2), one);
+                    _mm256_storeu_ps(ptr.add(stride * 2 + 8), one);
+                    _mm256_storeu_ps(ptr.add(stride * 3), one);
+                    _mm256_storeu_ps(ptr.add(stride * 3 + 8), one);
+                    i += 4;
+                }
+            }
         }
     } else {
         unimplemented!();
     }
+    unsafe {
+        _mm256_zeroupper();
+    }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
     assert_eq!(rows % 4, 0);
     let data_end = unsafe { data.add(stride * rows) };
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        // Can't use _mm256_set1_ps due to vzeroupper.
-        let one = &[1.0f32];
-        if STORE == 8 {
-            if stride == 8 {
-                unsafe {
-                    asm!(
-                    "vbroadcastss {tmp0}, [{one}]",
-                    ".p2align 4",
-                    "2:",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 64], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 96], {tmp0}",
-                    "add {data}, 128",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    one = in(reg) one.as_ptr(),
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(ymm_reg) _,
-                    options(nostack),
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    "vbroadcastss {tmp0}, [{one}]",
-                    ".p2align 4",
-                    "2:",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + {stride}], {tmp0}",
-                    "lea {data}, [{data} + {stride} * 2]",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + {stride}], {tmp0}",
-                    "lea {data}, [{data} + {stride} * 2]",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    one = in(reg) one.as_ptr(),
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(ymm_reg) _,
-                    options(nostack),
-                    );
-                }
-            }
-        } else if STORE == 16 {
-            if stride == 16 {
-                unsafe {
-                    asm!(
-                    "vbroadcastss {tmp0}, [{one}]",
-                    ".p2align 4",
-                    "2:",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 64], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 96], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 128], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 160], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 192], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 224], {tmp0}",
-                    "add {data}, 256",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    one = in(reg) one.as_ptr(),
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    tmp0 = out(ymm_reg) _,
-                    options(nostack),
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                    "vbroadcastss {tmp0}, [{one}]",
-                    ".p2align 4",
-                    "2:",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "add {data}, {stride}",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "add {data}, {stride}",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "add {data}, {stride}",
-                    "vmovups ymmword ptr [{data}], {tmp0}",
-                    "vmovups ymmword ptr [{data} + 32], {tmp0}",
-                    "add {data}, {stride}",
-                    "cmp {data}, {data_end}",
-                    "jb 2b",
-                    "vzeroupper",
-                    one = in(reg) one.as_ptr(),
-                    data = inout(reg) data => _,
-                    data_end = in(reg) data_end,
-                    stride = in(reg) stride * 4,
-                    tmp0 = out(ymm_reg) _,
-                    options(nostack),
-                    );
-                }
+    // Can't use _mm256_set1_ps due to vzeroupper.
+    let one = &[1.0f32];
+    if STORE == 8 {
+        if stride == 8 {
+            unsafe {
+                asm!(
+                "vbroadcastss {tmp0}, [{one}]",
+                ".p2align 4",
+                "2:",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "vmovups ymmword ptr [{data} + 64], {tmp0}",
+                "vmovups ymmword ptr [{data} + 96], {tmp0}",
+                "add {data}, 128",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                one = in(reg) one.as_ptr(),
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(ymm_reg) _,
+                options(nostack),
+                );
             }
         } else {
-            unimplemented!();
+            unsafe {
+                asm!(
+                "vbroadcastss {tmp0}, [{one}]",
+                ".p2align 4",
+                "2:",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + {stride}], {tmp0}",
+                "lea {data}, [{data} + {stride} * 2]",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + {stride}], {tmp0}",
+                "lea {data}, [{data} + {stride} * 2]",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                one = in(reg) one.as_ptr(),
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(ymm_reg) _,
+                options(nostack),
+                );
+            }
+        }
+    } else if STORE == 16 {
+        if stride == 16 {
+            unsafe {
+                asm!(
+                "vbroadcastss {tmp0}, [{one}]",
+                ".p2align 4",
+                "2:",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "vmovups ymmword ptr [{data} + 64], {tmp0}",
+                "vmovups ymmword ptr [{data} + 96], {tmp0}",
+                "vmovups ymmword ptr [{data} + 128], {tmp0}",
+                "vmovups ymmword ptr [{data} + 160], {tmp0}",
+                "vmovups ymmword ptr [{data} + 192], {tmp0}",
+                "vmovups ymmword ptr [{data} + 224], {tmp0}",
+                "add {data}, 256",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                one = in(reg) one.as_ptr(),
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(ymm_reg) _,
+                options(nostack),
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                "vbroadcastss {tmp0}, [{one}]",
+                ".p2align 4",
+                "2:",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "add {data}, {stride}",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "add {data}, {stride}",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "add {data}, {stride}",
+                "vmovups ymmword ptr [{data}], {tmp0}",
+                "vmovups ymmword ptr [{data} + 32], {tmp0}",
+                "add {data}, {stride}",
+                "cmp {data}, {data_end}",
+                "jb 2b",
+                "vzeroupper",
+                one = in(reg) one.as_ptr(),
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(ymm_reg) _,
+                options(nostack),
+                );
+            }
         }
     } else {
         unimplemented!();
@@ -1096,6 +1097,12 @@ fn scalar_add_latency(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mu
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
+}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
     assert_eq!(iterations % 4, 0);
@@ -1132,6 +1139,12 @@ fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: 
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
     assert_eq!(iterations % 4, 0);
@@ -1230,6 +1243,20 @@ fn scalar_fma(
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_fma(
+    iterations: usize,
+    a: &[f32; 16],
+    b: &[f32; 16],
+    c: &[f32; 16],
+    d: &[f32; 16],
+    e: &[f32; 16],
+    result: &mut [f32; 32],
+) {
+}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_fma(
     iterations: usize,
@@ -1295,6 +1322,20 @@ fn f32x4_fma(
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_fma_asm(
+    iterations: usize,
+    a: &[f32; 16],
+    b: &[f32; 16],
+    c: &[f32; 16],
+    d: &[f32; 16],
+    e: &[f32; 16],
+    result: &mut [f32; 32],
+) {
+}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_fma_asm(
     iterations: usize,
@@ -1379,6 +1420,20 @@ fn f32x4_fma_asm(
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_fma(
+    iterations: usize,
+    a: &[f32; 16],
+    b: &[f32; 16],
+    c: &[f32; 16],
+    d: &[f32; 16],
+    e: &[f32; 16],
+    result: &mut [f32; 32],
+) {
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_fma(
     iterations: usize,
@@ -1425,6 +1480,20 @@ fn f32x8_fma(
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_fma_asm(
+    iterations: usize,
+    a: &[f32; 16],
+    b: &[f32; 16],
+    c: &[f32; 16],
+    d: &[f32; 16],
+    e: &[f32; 16],
+    result: &mut [f32; 32],
+) {
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_fma_asm(
     iterations: usize,
@@ -1551,6 +1620,11 @@ fn scalar_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     *result = acc;
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);
@@ -1603,6 +1677,10 @@ fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);
@@ -1677,6 +1755,11 @@ fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     let mut a0 = unsafe { _mm256_set1_ps(0.0) };
@@ -1709,6 +1792,11 @@ fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);
@@ -1812,6 +1900,11 @@ fn scalar_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     *result = acc;
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);
@@ -1864,6 +1957,11 @@ fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);
@@ -1938,6 +2036,11 @@ fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     let mut a0 = unsafe { _mm256_set1_ps(0.0) };
@@ -1970,6 +2073,11 @@ fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn f32x8_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     assert_eq!(rows % 4, 0);

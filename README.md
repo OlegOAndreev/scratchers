@@ -1,4 +1,4 @@
-Various Rust-related experiments and benchmarks.
+Various Rust-related experiments and benchmarks. Run cargo android for building for aarch64.
 
 TODO:
 * Add various versions of v3 (with workgroup memory)
