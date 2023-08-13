@@ -1,8 +1,8 @@
-use std::{env, fs};
 use std::path::PathBuf;
 use std::process::Command;
+use std::{env, fs};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 
 fn main() -> Result<()> {
     env_logger::builder().filter_level(log::LevelFilter::Info).init();
@@ -15,19 +15,14 @@ fn main() -> Result<()> {
 
 fn compile_ispc() -> Result<()> {
     let out_dir = env::var_os("OUT_DIR").map(PathBuf::from).unwrap();
-    let ispc_paths = glob::glob("./**/*.ispc")?;
+    let ispc_paths = glob::glob("./**/*.ispc").map_err(|e| anyhow!("Globbing: {:?}", e))?;
 
     let mut build = cc::Build::new();
     for p in ispc_paths {
         let ispc_path = p?;
-        let file_name = ispc_path.file_stem()
-            .expect("Strange ispc filename")
-            .to_str()
-            .unwrap();
-        let obj_path = out_dir.join(format!("{}_ispc", file_name))
-            .with_extension(obj_extension());
-        let header_path = out_dir.join(format!("{}_ispc", file_name))
-            .with_extension("h");
+        let file_name = ispc_path.file_stem().expect("Strange ispc filename").to_str().unwrap();
+        let obj_path = out_dir.join(format!("{}_ispc", file_name)).with_extension(obj_extension());
+        let header_path = out_dir.join(format!("{}_ispc", file_name)).with_extension("h");
         build.object(&obj_path);
 
         let args = ispc_args()?;
@@ -39,7 +34,8 @@ fn compile_ispc() -> Result<()> {
             .arg(&obj_path)
             .arg("-h")
             .arg(&header_path)
-            .output()?;
+            .output()
+            .map_err(|e| anyhow!("Running ispc: {:?}", e))?;
 
         if !output.stderr.is_empty() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -71,8 +67,12 @@ fn ispc_args() -> Result<Vec<String>> {
     }
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
-    if target_os != "android" && target_os != "ios" && target_os != "linux"
-        && target_os != "macos" && target_os != "windows" {
+    if target_os != "android"
+        && target_os != "ios"
+        && target_os != "linux"
+        && target_os != "macos"
+        && target_os != "windows"
+    {
         bail!("Unsupported target OS {}", target_os);
     }
     ret.push(format!("--target-os={}", target_os));
