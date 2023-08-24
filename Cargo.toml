@@ -30,6 +30,10 @@ harness = false
 #name = "threadpool"
 #harness = false
 
+[[bin]]
+name = "bits"
+path = "benches/bench-bits/bits.rs"
+
 [dependencies]
 anyhow = "^1.0"
 ash = { version = "^0.37", optional = true }
