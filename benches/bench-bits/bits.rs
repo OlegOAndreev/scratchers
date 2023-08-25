@@ -29,8 +29,8 @@ fn main() -> Result<()> {
     let load_time = Instant::now() - start_load;
     println!("Parsed data in {:?}", load_time);
 
-    let start_compute = Instant::now();
     let mut our_partitions = vec![0; partitions.len()];
+    let start_compute = Instant::now();
     match algo.as_str() {
         "array" => array_partition(&strings, &mut our_partitions),
         "bitmask" => bitmask_partition(&strings, &mut our_partitions),
@@ -62,11 +62,13 @@ fn array_partition(strings: &[String], our_partitions: &mut [u32]) {
         let mut ret = 1u32;
         mask.fill(false);
         for &b in s.as_bytes() {
-            if mask[b as usize] {
-                mask.fill(false);
-                ret += 1;
+            unsafe {
+                if *mask.get_unchecked(b as usize) {
+                    mask.fill(false);
+                    ret += 1;
+                }
+                *mask.get_unchecked_mut(b as usize) = true;
             }
-            mask[b as usize] = true
         }
         *out = ret
     }
@@ -95,10 +97,12 @@ fn array_noclear_partition(strings: &[String], our_partitions: &mut [u32]) {
         prev.fill(0);
         let mut ret = 1u32;
         for &b in s.as_bytes() {
-            if prev[b as usize] == ret {
-                ret += 1;
+            unsafe {
+                if *prev.get_unchecked(b as usize) == ret {
+                    ret += 1;
+                }
+                *prev.get_unchecked_mut(b as usize) = ret;
             }
-            prev[b as usize] = ret
         }
         *out = ret
     }
