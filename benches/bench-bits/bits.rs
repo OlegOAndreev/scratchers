@@ -75,14 +75,15 @@ fn array_partition(strings: &[String], our_partitions: &mut [u32]) {
 fn bitmask_partition(strings: &[String], our_partitions: &mut [u32]) {
     for (s, out) in strings.iter().zip(our_partitions) {
         let mut ret = 1u32;
-        let mut mask = 0u32;
+        let mut mask = 0usize;
         for &b in s.as_bytes() {
-            let m = 1u32 << (b - b'A');
+            let m = 1usize << (b - b'A');
             if mask & m != 0 {
-                mask = 0;
+                mask = m;
                 ret += 1;
+            } else {
+                mask |= m;
             }
-            mask |= m;
         }
         *out = ret
     }
