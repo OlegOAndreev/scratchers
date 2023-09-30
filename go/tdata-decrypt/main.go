@@ -93,6 +93,7 @@ func main() {
 			log.Fatalf("Could not decrypt %s: %v\n", filename, err)
 		}
 	}
+	log.Printf("Successfully decrypted %d files\n", len(filenames))
 }
 
 func getKeyDataFile(tdataPath string) string {
@@ -223,7 +224,6 @@ func parseKeyData(keyData []byte, passcode string) ([]byte, error) {
 		iterations = 100000
 	}
 	passcodeKey := pbkdf2.Key(pass, salt, iterations, authKeyLen, sha512.New)
-	log.Printf("Got %d bytes salt from key data, %d bytes passcode key\n", len(salt), len(passcodeKey))
 
 	localKeyHash := keyEncrypted[:16]
 	localKeyEncryptedData := keyEncrypted[16:]
@@ -233,7 +233,6 @@ func parseKeyData(keyData []byte, passcode string) ([]byte, error) {
 	}
 
 	localKeyLen := binary.LittleEndian.Uint32(localKeyData[:4])
-	log.Printf("Got local key len %d\n", localKeyLen-4)
 	return localKeyData[4:localKeyLen], nil
 }
 
@@ -305,8 +304,6 @@ func decryptTdef(filename string, key []byte) error {
 	if err := os.WriteFile(outName, data, 0666); err != nil {
 		return fmt.Errorf("could not write file: %v", err)
 	}
-
-	fmt.Printf("All ok with %s\n", filename)
 
 	return nil
 }
