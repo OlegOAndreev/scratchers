@@ -31,10 +31,10 @@ uint64_t HorizontalSumAvx2CImpl(uint8_t* buf, size_t size)
 		__m256i accum = _mm256_setzero_si256();
 		if (vsize >= 64) {
 			for (size_t j = 0; j < 16; j++) {
-				__m256i v0 = _mm256_cvtepu8_epi16(_mm_loadu_ps((const float*)(buf)));
-				__m256i v1 = _mm256_cvtepu8_epi16(_mm_loadu_ps((const float*)(buf + 16)));
-				__m256i v2 = _mm256_cvtepu8_epi16(_mm_loadu_ps((const float*)(buf + 32)));
-				__m256i v3 = _mm256_cvtepu8_epi16(_mm_loadu_ps((const float*)(buf + 48)));
+				__m256i v0 = _mm256_cvtepu8_epi16(_mm_castps_si128(_mm_loadu_ps((const float*)(buf))));
+				__m256i v1 = _mm256_cvtepu8_epi16(_mm_castps_si128(_mm_loadu_ps((const float*)(buf + 16))));
+				__m256i v2 = _mm256_cvtepu8_epi16(_mm_castps_si128(_mm_loadu_ps((const float*)(buf + 32))));
+				__m256i v3 = _mm256_cvtepu8_epi16(_mm_castps_si128(_mm_loadu_ps((const float*)(buf + 48))));
 				buf += 64;
 				v0 = _mm256_add_epi16(v0, v1);
 				v2 = _mm256_add_epi16(v2, v3);
@@ -44,7 +44,7 @@ uint64_t HorizontalSumAvx2CImpl(uint8_t* buf, size_t size)
 			vsize -= 64;
 		} else {
 			for (size_t j = 0; j < vsize; j++) {
-				__m256i v0 = _mm256_cvtepu8_epi16(_mm_loadu_ps((const float*)(buf)));
+				__m256i v0 = _mm256_cvtepu8_epi16(_mm_castps_si128(_mm_loadu_ps((const float*)(buf))));
 				buf += 16;
 				accum = _mm256_add_epi16(accum, v0);
 			}

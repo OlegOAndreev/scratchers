@@ -77,7 +77,7 @@ func bench(buf []byte, indices []pair, total uint64) {
 		{"HorizontalSumNibblesUnsafe", HorizontalSumNibblesUnsafe},
 	}
 	if avx2Enabled {
-		funcs = append(funcs, benchFunc{"HorizontalSummAvx2", HorizontalSumAvx2})
+		funcs = append(funcs, benchFunc{"HorizontalSumAvx2", HorizontalSumAvx2})
 	}
 	if hsumcgo.Enabled {
 		funcs = append(funcs, benchFunc{"HorizontalSumNaiveC", hsumcgo.HorizontalSumNaiveC})
