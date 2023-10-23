@@ -4,7 +4,7 @@ package hsumcgo
 
 const Enabled = false
 
-func HorizontalAddCNaive(buf []byte, from int, to int) uint64 {
+func HorizontalSumNaiveC(buf []byte, from int, to int) uint64 {
 	panic("CGo disabled")
 }
 
