@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/olegoandreev/scratchers/benches/bench-hsum/hsumcgo"
@@ -32,7 +34,13 @@ func (x *XorShift128) NextN(max uint32) uint32 {
 	return uint32(uint64(x.Next()) * uint64(max) >> 32)
 }
 
+var filterFunc string
+
 func main() {
+	if len(os.Args) > 1 {
+		filterFunc = os.Args[1]
+	}
+
 	const N = 1024 * 1024 * 1024
 	buf := make([]byte, N)
 	fillRandom(buf, 13)
@@ -78,6 +86,11 @@ func bench(buf []byte, indices []pair, total uint64) {
 	}
 	if avx2Enabled {
 		funcs = append(funcs, benchFunc{"HorizontalSumAvx2", HorizontalSumAvx2})
+		funcs = append(funcs, benchFunc{"HorizontalSumAvx2V2", HorizontalSumAvx2V2})
+	}
+	if neonEnabled {
+		funcs = append(funcs, benchFunc{"HorizontalSumNeon", HorizontalSumNeon})
+		funcs = append(funcs, benchFunc{"HorizontalSumNeonV2", HorizontalSumNeonV2})
 	}
 	if hsumcgo.Enabled {
 		funcs = append(funcs, benchFunc{"HorizontalSumNaiveC", hsumcgo.HorizontalSumNaiveC})
@@ -87,6 +100,9 @@ func bench(buf []byte, indices []pair, total uint64) {
 	}
 
 	for _, f := range funcs {
+		if filterFunc != "" && !strings.Contains(f.name, filterFunc) && !strings.Contains(f.name, "(warmup)") {
+			continue
+		}
 		startTime := time.Now()
 		var sum uint64
 		for _, p := range indices {

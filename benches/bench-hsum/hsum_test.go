@@ -127,20 +127,31 @@ func testHorizontalAdd(t *testing.T, f func(buf []byte, from int, to int) uint64
 }
 
 func TestHorizontalAdd(t *testing.T) {
-	//t.Run("HorizontalSumUnroll", func(t *testing.T) {
-	//	testHorizontalAdd(t, HorizontalSumUnroll)
-	//})
-	//t.Run("HorizontalSumNibbles", func(t *testing.T) {
-	//	testHorizontalAdd(t, HorizontalSumNibbles)
-	//})
-	//t.Run("HorizontalSumNibblesUnsafe", func(t *testing.T) {
-	//	testHorizontalAdd(t, HorizontalSumNibblesUnsafe)
-	//})
-	//if avx2Enabled {
-	//	t.Run("HorizontalSumAvx2", func(t *testing.T) {
-	//		testHorizontalAdd(t, HorizontalSumAvx2)
-	//	})
-	//}
+	t.Run("HorizontalSumUnroll", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumUnroll)
+	})
+	t.Run("HorizontalSumNibbles", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumNibbles)
+	})
+	t.Run("HorizontalSumNibblesUnsafe", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumNibblesUnsafe)
+	})
+	if avx2Enabled {
+		t.Run("HorizontalSumAvx2", func(t *testing.T) {
+			testHorizontalAdd(t, HorizontalSumAvx2)
+		})
+		t.Run("HorizontalSumAvx2V2", func(t *testing.T) {
+			testHorizontalAdd(t, HorizontalSumAvx2V2)
+		})
+	}
+	if neonEnabled {
+		t.Run("HorizontalSumNeon", func(t *testing.T) {
+			testHorizontalAdd(t, HorizontalSumNeon)
+		})
+		t.Run("HorizontalSumNeonV2", func(t *testing.T) {
+			testHorizontalAdd(t, HorizontalSumNeonV2)
+		})
+	}
 	if hsumcgo.Enabled {
 		t.Run("HorizontalSumNaiveC", func(t *testing.T) {
 			testHorizontalAdd(t, hsumcgo.HorizontalSumNaiveC)
@@ -183,6 +194,17 @@ func TestHorizontalAddRandom(t *testing.T) {
 	if avx2Enabled {
 		t.Run("HorizontalSumAvx2", func(t *testing.T) {
 			testHorizontalAddRandom(t, HorizontalSumAvx2, buf)
+		})
+		t.Run("HorizontalSumAvx2V2", func(t *testing.T) {
+			testHorizontalAddRandom(t, HorizontalSumAvx2V2, buf)
+		})
+	}
+	if neonEnabled {
+		t.Run("HorizontalSumNeon", func(t *testing.T) {
+			testHorizontalAddRandom(t, HorizontalSumNeon, buf)
+		})
+		t.Run("HorizontalSumNeonV2", func(t *testing.T) {
+			testHorizontalAddRandom(t, HorizontalSumNeonV2, buf)
 		})
 	}
 	if hsumcgo.Enabled {
