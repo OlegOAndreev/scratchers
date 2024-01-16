@@ -1,6 +1,8 @@
 // Benchmark basic SIMD operations.
 
 use std::arch::asm;
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::{vdupq_n_f32, vst1q_f32};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use std::arch::x86_64::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps,
@@ -35,8 +37,7 @@ fn basic_simd_load_benchmark_impl<const LOAD: usize>(
         LOAD, rows, stride, align
     );
     let mut group = c.benchmark_group(name);
-    // Measure throughput in elements, not in Gb.
-    group.throughput(criterion::Throughput::Elements(rows as u64 * LOAD as u64));
+    group.throughput(criterion::Throughput::Bytes(rows as u64 * LOAD as u64 * 4));
 
     let data_ptr = data.as_ptr();
     let aligned_ptr = unsafe {
@@ -44,22 +45,199 @@ fn basic_simd_load_benchmark_impl<const LOAD: usize>(
             .add(data_ptr.align_offset(8)) // Align for f32x8
             .add(align)
     };
+
     group.bench_function("scalar asm", |b| {
         b.iter(|| scalar_load_asm::<LOAD>(aligned_ptr, stride, rows))
     });
+
+    #[cfg(target_arch = "aarch64")]
+    group.bench_function("scalar asm ldr", |b| {
+        b.iter(|| scalar_load_asm_ldr::<LOAD>(aligned_ptr, stride, rows))
+    });
+
     group.bench_function("f32x4 asm", |b| {
         b.iter(|| f32x4_load_asm::<LOAD>(aligned_ptr, stride, rows))
     });
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        group.bench_function("f32x8 asm", |b| {
-            b.iter(|| f32x8_load_asm::<LOAD>(aligned_ptr, stride, rows))
-        });
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 asm", |b| {
+        b.iter(|| f32x8_load_asm::<LOAD>(aligned_ptr, stride, rows))
+    });
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 2, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    if LOAD == 8 {
+        unsafe {
+            asm!(
+            ".p2align 5",
+            "2:",
+            "ldp {tmp0:s}, {tmp1:s}, [{data}]",
+            "ldp {tmp2:s}, {tmp3:s}, [{data}, #8]",
+            "ldp {tmp4:s}, {tmp5:s}, [{data}, #16]",
+            "ldp {tmp6:s}, {tmp7:s}, [{data}, #24]",
+            "add {data}, {data}, {stride}",
+            "ldp {tmp0:s}, {tmp1:s}, [{data}]",
+            "ldp {tmp2:s}, {tmp3:s}, [{data}, #8]",
+            "ldp {tmp4:s}, {tmp5:s}, [{data}, #16]",
+            "ldp {tmp6:s}, {tmp7:s}, [{data}, #24]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(vreg) _,
+            tmp1 = out(vreg) _,
+            tmp2 = out(vreg) _,
+            tmp3 = out(vreg) _,
+            tmp4 = out(vreg) _,
+            tmp5 = out(vreg) _,
+            tmp6 = out(vreg) _,
+            tmp7 = out(vreg) _,
+            options(nostack),
+            );
+        }
+    } else if LOAD == 16 {
+        unsafe {
+            asm!(
+            ".p2align 5",
+            "2:",
+            "ldp {tmp0:s}, {tmp1:s}, [{data}]",
+            "ldp {tmp2:s}, {tmp3:s}, [{data}, #8]",
+            "ldp {tmp4:s}, {tmp5:s}, [{data}, #16]",
+            "ldp {tmp6:s}, {tmp7:s}, [{data}, #24]",
+            "ldp {tmp8:s}, {tmp9:s}, [{data}, #32]",
+            "ldp {tmp10:s}, {tmp11:s}, [{data}, #40]",
+            "ldp {tmp12:s}, {tmp13:s}, [{data}, #48]",
+            "ldp {tmp14:s}, {tmp15:s}, [{data}, #56]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(vreg) _,
+            tmp1 = out(vreg) _,
+            tmp2 = out(vreg) _,
+            tmp3 = out(vreg) _,
+            tmp4 = out(vreg) _,
+            tmp5 = out(vreg) _,
+            tmp6 = out(vreg) _,
+            tmp7 = out(vreg) _,
+            tmp8 = out(vreg) _,
+            tmp9 = out(vreg) _,
+            tmp10 = out(vreg) _,
+            tmp11 = out(vreg) _,
+            tmp12 = out(vreg) _,
+            tmp13 = out(vreg) _,
+            tmp14 = out(vreg) _,
+            tmp15 = out(vreg) _,
+            options(nostack),
+            );
+        }
+    } else {
+        unimplemented!();
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
+fn scalar_load_asm_ldr<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 2, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    if LOAD == 8 {
+        unsafe {
+            asm!(
+            ".p2align 5",
+            "2:",
+            "ldr {tmp0:s}, [{data}]",
+            "ldr {tmp1:s}, [{data}, #4]",
+            "ldr {tmp2:s}, [{data}, #8]",
+            "ldr {tmp3:s}, [{data}, #12]",
+            "ldr {tmp4:s}, [{data}, #16]",
+            "ldr {tmp5:s}, [{data}, #20]",
+            "ldr {tmp6:s}, [{data}, #24]",
+            "ldr {tmp7:s}, [{data}, #28]",
+            "add {data}, {data}, {stride}",
+            "ldr {tmp0:s}, [{data}]",
+            "ldr {tmp1:s}, [{data}, #4]",
+            "ldr {tmp2:s}, [{data}, #8]",
+            "ldr {tmp3:s}, [{data}, #12]",
+            "ldr {tmp4:s}, [{data}, #16]",
+            "ldr {tmp5:s}, [{data}, #20]",
+            "ldr {tmp6:s}, [{data}, #24]",
+            "ldr {tmp7:s}, [{data}, #28]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(vreg) _,
+            tmp1 = out(vreg) _,
+            tmp2 = out(vreg) _,
+            tmp3 = out(vreg) _,
+            tmp4 = out(vreg) _,
+            tmp5 = out(vreg) _,
+            tmp6 = out(vreg) _,
+            tmp7 = out(vreg) _,
+            options(nostack),
+            );
+        }
+    } else if LOAD == 16 {
+        unsafe {
+            asm!(
+            ".p2align 5",
+            "2:",
+            "ldr {tmp0:s}, [{data}]",
+            "ldr {tmp1:s}, [{data}, #4]",
+            "ldr {tmp2:s}, [{data}, #8]",
+            "ldr {tmp3:s}, [{data}, #12]",
+            "ldr {tmp4:s}, [{data}, #16]",
+            "ldr {tmp5:s}, [{data}, #20]",
+            "ldr {tmp6:s}, [{data}, #24]",
+            "ldr {tmp7:s}, [{data}, #28]",
+            "ldr {tmp8:s}, [{data}, #32]",
+            "ldr {tmp9:s}, [{data}, #36]",
+            "ldr {tmp10:s}, [{data}, #40]",
+            "ldr {tmp11:s}, [{data}, #44]",
+            "ldr {tmp12:s}, [{data}, #48]",
+            "ldr {tmp13:s}, [{data}, #52]",
+            "ldr {tmp14:s}, [{data}, #56]",
+            "ldr {tmp15:s}, [{data}, #60]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            tmp0 = out(vreg) _,
+            tmp1 = out(vreg) _,
+            tmp2 = out(vreg) _,
+            tmp3 = out(vreg) _,
+            tmp4 = out(vreg) _,
+            tmp5 = out(vreg) _,
+            tmp6 = out(vreg) _,
+            tmp7 = out(vreg) _,
+            tmp8 = out(vreg) _,
+            tmp9 = out(vreg) _,
+            tmp10 = out(vreg) _,
+            tmp11 = out(vreg) _,
+            tmp12 = out(vreg) _,
+            tmp13 = out(vreg) _,
+            tmp14 = out(vreg) _,
+            tmp15 = out(vreg) _,
+            options(nostack),
+            );
+        }
+    } else {
+        unimplemented!();
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -148,7 +326,113 @@ fn scalar_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usi
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
+fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    if LOAD == 8 {
+        if stride == 8 {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], #64",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], #64",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(vreg) _,
+                tmp1 = out(vreg) _,
+                tmp2 = out(vreg) _,
+                tmp3 = out(vreg) _,
+                tmp4 = out(vreg) _,
+                tmp5 = out(vreg) _,
+                tmp6 = out(vreg) _,
+                tmp7 = out(vreg) _,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp2}.4s, {tmp3}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp6}.4s, {tmp7}.4s }}, [{data}], {stride}",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(vreg) _,
+                tmp1 = out(vreg) _,
+                tmp2 = out(vreg) _,
+                tmp3 = out(vreg) _,
+                tmp4 = out(vreg) _,
+                tmp5 = out(vreg) _,
+                tmp6 = out(vreg) _,
+                tmp7 = out(vreg) _,
+                options(nostack)
+                );
+            }
+        }
+    } else if LOAD == 16 {
+        if stride == 16 {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], #64",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], #64",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], #64",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], #64",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                tmp0 = out(vreg) _,
+                tmp1 = out(vreg) _,
+                tmp2 = out(vreg) _,
+                tmp3 = out(vreg) _,
+                tmp4 = out(vreg) _,
+                tmp5 = out(vreg) _,
+                tmp6 = out(vreg) _,
+                tmp7 = out(vreg) _,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], {stride}",
+                "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], {stride}",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                tmp0 = out(vreg) _,
+                tmp1 = out(vreg) _,
+                tmp2 = out(vreg) _,
+                tmp3 = out(vreg) _,
+                tmp4 = out(vreg) _,
+                tmp5 = out(vreg) _,
+                tmp6 = out(vreg) _,
+                tmp7 = out(vreg) _,
+                options(nostack)
+                );
+            }
+        }
+    } else {
+        unimplemented!();
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -298,10 +582,6 @@ fn f32x4_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usiz
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {}
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_asm<const LOAD: usize>(data: *const f32, stride: usize, rows: usize) {
@@ -446,44 +726,49 @@ fn basic_simd_store_benchmark_impl<const STORE: usize>(
         STORE, rows, stride, align
     );
     let mut group = c.benchmark_group(name);
-    // Measure throughput in elements, not in Gb.
-    group.throughput(criterion::Throughput::Elements(rows as u64 * STORE as u64));
+    group.throughput(criterion::Throughput::Bytes(rows as u64 * STORE as u64 * 4));
 
     let data_ptr = data.as_mut_ptr();
     let to_align = data_ptr.align_offset(8); // Align for f32x8
     let aligned_ptr = unsafe { data_ptr.add(to_align).add(align) };
+
     group.bench_function("scalar rust", |b| {
         data.fill(0.0);
         b.iter(|| scalar_store::<STORE>(aligned_ptr, stride, rows));
         assert_one(&data[to_align + align..], STORE, rows, stride);
     });
+
     group.bench_function("scalar asm", |b| {
         data.fill(0.0);
         b.iter(|| scalar_store_asm::<STORE>(aligned_ptr, stride, rows));
         assert_one(&data[to_align + align..], STORE, rows, stride);
     });
+
     group.bench_function("f32x4 rust", |b| {
         data.fill(0.0);
         b.iter(|| f32x4_store::<STORE>(aligned_ptr, stride, rows));
         assert_one(&data[to_align + align..], STORE, rows, stride);
     });
+
     group.bench_function("f32x4 asm", |b| {
         data.fill(0.0);
         b.iter(|| f32x4_store_asm::<STORE>(aligned_ptr, stride, rows));
         assert_one(&data[to_align + align..], STORE, rows, stride);
     });
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        group.bench_function("f32x8 rust", |b| {
-            data.fill(0.0);
-            b.iter(|| f32x8_store::<STORE>(aligned_ptr, stride, rows));
-            assert_one(&data[to_align + align..], STORE, rows, stride);
-        });
-        group.bench_function("f32x8 asm", |b| {
-            data.fill(0.0);
-            b.iter(|| f32x8_store_asm::<STORE>(aligned_ptr, stride, rows));
-            assert_one(&data[to_align + align..], STORE, rows, stride);
-        });
-    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 rust", |b| {
+        data.fill(0.0);
+        b.iter(|| f32x8_store::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 asm", |b| {
+        data.fill(0.0);
+        b.iter(|| f32x8_store_asm::<STORE>(aligned_ptr, stride, rows));
+        assert_one(&data[to_align + align..], STORE, rows, stride);
+    });
 }
 
 fn assert_one(data: &[f32], row_len: usize, rows: usize, stride: usize) {
@@ -551,7 +836,61 @@ fn scalar_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) 
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 2, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+    let one = unsafe { vdupq_n_f32(1.0) };
+    if STORE == 8 {
+        unsafe {
+            asm!(
+            ".p2align 5",
+            "2:",
+            "stp {one:s}, {one:s}, [{data}]",
+            "stp {one:s}, {one:s}, [{data}, #8]",
+            "stp {one:s}, {one:s}, [{data}, #16]",
+            "stp {one:s}, {one:s}, [{data}, #24]",
+            "add {data}, {data}, {stride}",
+            "stp {one:s}, {one:s}, [{data}]",
+            "stp {one:s}, {one:s}, [{data}, #8]",
+            "stp {one:s}, {one:s}, [{data}, #16]",
+            "stp {one:s}, {one:s}, [{data}, #24]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            one = in(vreg) one,
+            options(nostack),
+            );
+        }
+    } else if STORE == 16 {
+        unsafe {
+            asm!(
+            ".p2align 4",
+            "2:",
+            "stp {one:s}, {one:s}, [{data}]",
+            "stp {one:s}, {one:s}, [{data}, #8]",
+            "stp {one:s}, {one:s}, [{data}, #16]",
+            "stp {one:s}, {one:s}, [{data}, #24]",
+            "stp {one:s}, {one:s}, [{data}, #32]",
+            "stp {one:s}, {one:s}, [{data}, #40]",
+            "stp {one:s}, {one:s}, [{data}, #48]",
+            "stp {one:s}, {one:s}, [{data}, #56]",
+            "add {data}, {data}, {stride}",
+            "cmp {data}, {data_end}",
+            "b.lo 2b",
+            data = inout(reg) data => _,
+            data_end = in(reg) data_end,
+            stride = in(reg) stride * 4,
+            one = in(vreg) one,
+            options(nostack),
+            );
+        }
+    } else {
+        unimplemented!();
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -629,7 +968,97 @@ fn scalar_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usi
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let one = unsafe { vdupq_n_f32(1.0) };
+    if STORE == 8 {
+        if stride == 8 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 8);
+                    vst1q_f32(ptr, one);
+                    vst1q_f32(ptr.add(4), one);
+                    vst1q_f32(ptr.add(8), one);
+                    vst1q_f32(ptr.add(12), one);
+                    vst1q_f32(ptr.add(16), one);
+                    vst1q_f32(ptr.add(20), one);
+                    vst1q_f32(ptr.add(24), one);
+                    vst1q_f32(ptr.add(28), one);
+                    i += 4;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    vst1q_f32(ptr, one);
+                    vst1q_f32(ptr.add(4), one);
+                    vst1q_f32(ptr.add(stride), one);
+                    vst1q_f32(ptr.add(stride + 4), one);
+                    vst1q_f32(ptr.add(stride * 2), one);
+                    vst1q_f32(ptr.add(stride * 2 + 4), one);
+                    vst1q_f32(ptr.add(stride * 3), one);
+                    vst1q_f32(ptr.add(stride * 3 + 4), one);
+                    i += 4;
+                }
+            }
+        }
+    } else if STORE == 16 {
+        if stride == 16 {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * 16);
+                    vst1q_f32(ptr, one);
+                    vst1q_f32(ptr.add(4), one);
+                    vst1q_f32(ptr.add(8), one);
+                    vst1q_f32(ptr.add(12), one);
+                    vst1q_f32(ptr.add(16), one);
+                    vst1q_f32(ptr.add(20), one);
+                    vst1q_f32(ptr.add(24), one);
+                    vst1q_f32(ptr.add(28), one);
+                    vst1q_f32(ptr.add(32), one);
+                    vst1q_f32(ptr.add(36), one);
+                    vst1q_f32(ptr.add(40), one);
+                    vst1q_f32(ptr.add(44), one);
+                    vst1q_f32(ptr.add(48), one);
+                    vst1q_f32(ptr.add(52), one);
+                    vst1q_f32(ptr.add(56), one);
+                    vst1q_f32(ptr.add(60), one);
+                    i += 4;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i < rows {
+                unsafe {
+                    let ptr = data.add(i * stride);
+                    vst1q_f32(ptr, one);
+                    vst1q_f32(ptr.add(4), one);
+                    vst1q_f32(ptr.add(8), one);
+                    vst1q_f32(ptr.add(12), one);
+                    vst1q_f32(ptr.add(stride), one);
+                    vst1q_f32(ptr.add(stride + 4), one);
+                    vst1q_f32(ptr.add(stride + 8), one);
+                    vst1q_f32(ptr.add(stride + 12), one);
+                    vst1q_f32(ptr.add(stride * 2), one);
+                    vst1q_f32(ptr.add(stride * 2 + 4), one);
+                    vst1q_f32(ptr.add(stride * 2 + 8), one);
+                    vst1q_f32(ptr.add(stride * 2 + 12), one);
+                    vst1q_f32(ptr.add(stride * 3), one);
+                    vst1q_f32(ptr.add(stride * 3 + 4), one);
+                    vst1q_f32(ptr.add(stride * 3 + 8), one);
+                    vst1q_f32(ptr.add(stride * 3 + 12), one);
+                    i += 4;
+                }
+            }
+        }
+    } else {
+        unimplemented!();
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -727,7 +1156,104 @@ fn f32x4_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
+fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
+    assert_eq!(rows % 4, 0);
+    let data_end = unsafe { data.add(stride * rows) };
+
+    let one = unsafe { vdupq_n_f32(1.0) };
+    if STORE == 8 {
+        if stride == 8 {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                // Rust inline assembly does not allow allocating sequential registers here and LLVM does not seem
+                // to allow non-sequential registers for st1 one way or another. That's why we have to use explicitly
+                // chosen registers instead of register classes.
+                in("v4") one,
+                in("v5") one,
+                in("v6") one,
+                in("v7") one,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "stp q4, q5, [{data}]",
+                "add {data}, {data}, {stride}",
+                "stp q4, q5, [{data}]",
+                "add {data}, {data}, {stride}",
+                "stp q4, q5, [{data}]",
+                "add {data}, {data}, {stride}",
+                "stp q4, q5, [{data}]",
+                "add {data}, {data}, {stride}",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                in("v4") one,
+                in("v5") one,
+                options(nostack)
+                );
+            }
+        }
+    } else if STORE == 16 {
+        if stride == 16 {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], #64",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                in("v4") one,
+                in("v5") one,
+                in("v6") one,
+                in("v7") one,
+                options(nostack)
+                );
+            }
+        } else {
+            unsafe {
+                asm!(
+                ".p2align 5",
+                "2:",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], {stride}",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], {stride}",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], {stride}",
+                "st1 {{ v4.4s, v5.4s, v6.4s, v7.4s }}, [{data}], {stride}",
+                "cmp {data}, {data_end}",
+                "b.lo 2b",
+                data = inout(reg) data => _,
+                data_end = in(reg) data_end,
+                stride = in(reg) stride * 4,
+                in("v4") one,
+                in("v5") one,
+                in("v6") one,
+                in("v7") one,
+                options(nostack)
+                );
+            }
+        }
+    } else {
+        unimplemented!();
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -856,10 +1382,6 @@ fn f32x4_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usiz
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
@@ -932,10 +1454,6 @@ fn f32x8_store<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {
         _mm256_zeroupper();
     }
 }
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_store_asm<const STORE: usize>(data: *mut f32, stride: usize, rows: usize) {}
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
@@ -1068,19 +1586,20 @@ pub fn basic_simd_add_latency_benchmark(c: &mut Criterion) {
         b.iter(|| scalar_add_latency(ITERATIONS, &arr, &brr, &mut result));
         assert_eq!(result, golden_result);
     });
+
     // Skip scalar asm code and intrinsic code.
     group.bench_function("f32x4 asm", |b| {
         result.fill(0.0);
         b.iter(|| f32x4_add_latency_asm(ITERATIONS, &arr, &brr, &mut result));
         assert_eq!(result, golden_result);
     });
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        group.bench_function("f32x8 asm", |b| {
-            result.fill(0.0);
-            b.iter(|| f32x8_add_latency_asm(ITERATIONS, &arr, &brr, &mut result));
-            assert_eq!(result, golden_result);
-        });
-    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 asm", |b| {
+        result.fill(0.0);
+        b.iter(|| f32x8_add_latency_asm(ITERATIONS, &arr, &brr, &mut result));
+        assert_eq!(result, golden_result);
+    });
 }
 
 #[inline(always)]
@@ -1099,8 +1618,7 @@ fn scalar_add_latency(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mu
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
-}
+fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -1137,11 +1655,6 @@ fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: 
         options(nostack),
         );
     }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -1194,29 +1707,33 @@ pub fn basic_simd_fma_benchmark(c: &mut Criterion) {
         b.iter(|| scalar_fma(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
         assert_eq!(result, golden_result);
     });
+
     // Skip scalar asm code.
     group.bench_function("f32x4 rust", |b| {
         result.fill(0.0);
         b.iter(|| f32x4_fma(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
         assert_eq!(result, golden_result);
     });
+
     group.bench_function("f32x4 asm", |b| {
         result.fill(0.0);
         b.iter(|| f32x4_fma_asm(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
         assert_eq!(result, golden_result);
     });
-    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        group.bench_function("f32x8 rust", |b| {
-            result.fill(0.0);
-            b.iter(|| f32x8_fma(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
-            assert_eq!(result, golden_result);
-        });
-        group.bench_function("f32x8 asm", |b| {
-            result.fill(0.0);
-            b.iter(|| f32x8_fma_asm(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
-            assert_eq!(result, golden_result);
-        });
-    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 rust", |b| {
+        result.fill(0.0);
+        b.iter(|| f32x8_fma(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
+        assert_eq!(result, golden_result);
+    });
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("f32x8 asm", |b| {
+        result.fill(0.0);
+        b.iter(|| f32x8_fma_asm(ITERATIONS, &arr, &brr, &crr, &drr, &err, &mut result));
+        assert_eq!(result, golden_result);
+    });
 }
 
 #[inline(always)]
@@ -1420,19 +1937,6 @@ fn f32x4_fma_asm(
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_fma(
-    iterations: usize,
-    a: &[f32; 16],
-    b: &[f32; 16],
-    c: &[f32; 16],
-    d: &[f32; 16],
-    e: &[f32; 16],
-    result: &mut [f32; 32],
-) {
-}
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_fma(
@@ -1478,19 +1982,6 @@ fn f32x8_fma(
         _mm256_storeu_ps(rp.add(24), a3);
         _mm256_zeroupper();
     }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_fma_asm(
-    iterations: usize,
-    a: &[f32; 16],
-    b: &[f32; 16],
-    c: &[f32; 16],
-    d: &[f32; 16],
-    e: &[f32; 16],
-    result: &mut [f32; 32],
-) {
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -1578,29 +2069,33 @@ pub fn basic_simd_load_fma_benchmark(c: &mut Criterion) {
             b.iter(|| scalar_load_fma(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
+
         // Skip scalar asm code.
         group.bench_function("f32x4 rust", |b| {
             result.fill(0.0);
             b.iter(|| f32x4_load_fma(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
+
         group.bench_function("f32x4 asm", |b| {
             result.fill(0.0);
             b.iter(|| f32x4_load_fma_asm(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
-        if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-            group.bench_function("f32x8 rust", |b| {
-                result.fill(0.0);
-                b.iter(|| f32x8_load_fma(data_ptr, rows, &mut result));
-                assert_eq!(result, golden_result);
-            });
-            group.bench_function("f32x8 asm", |b| {
-                result.fill(0.0);
-                b.iter(|| f32x8_load_fma_asm(data_ptr, rows, &mut result));
-                assert_eq!(result, golden_result);
-            });
-        }
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        group.bench_function("f32x8 rust", |b| {
+            result.fill(0.0);
+            b.iter(|| f32x8_load_fma(data_ptr, rows, &mut result));
+            assert_eq!(result, golden_result);
+        });
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        group.bench_function("f32x8 asm", |b| {
+            result.fill(0.0);
+            b.iter(|| f32x8_load_fma_asm(data_ptr, rows, &mut result));
+            assert_eq!(result, golden_result);
+        });
     }
 }
 
@@ -1755,10 +2250,6 @@ fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
@@ -1791,10 +2282,6 @@ fn f32x8_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
         _mm256_zeroupper();
     }
 }
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
@@ -1858,29 +2345,33 @@ pub fn basic_simd_load_add_benchmark(c: &mut Criterion) {
             b.iter(|| scalar_load_add(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
+
         // Skip scalar asm code.
         group.bench_function("f32x4 rust", |b| {
             result.fill(0.0);
             b.iter(|| f32x4_load_add(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
+
         group.bench_function("f32x4 asm", |b| {
             result.fill(0.0);
             b.iter(|| f32x4_load_add_asm(data_ptr, rows, &mut result));
             assert_eq!(result, golden_result);
         });
-        if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-            group.bench_function("f32x8 rust", |b| {
-                result.fill(0.0);
-                b.iter(|| f32x8_load_add(data_ptr, rows, &mut result));
-                assert_eq!(result, golden_result);
-            });
-            group.bench_function("f32x8 asm", |b| {
-                result.fill(0.0);
-                b.iter(|| f32x8_load_add_asm(data_ptr, rows, &mut result));
-                assert_eq!(result, golden_result);
-            });
-        }
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        group.bench_function("f32x8 rust", |b| {
+            result.fill(0.0);
+            b.iter(|| f32x8_load_add(data_ptr, rows, &mut result));
+            assert_eq!(result, golden_result);
+        });
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        group.bench_function("f32x8 asm", |b| {
+            result.fill(0.0);
+            b.iter(|| f32x8_load_add_asm(data_ptr, rows, &mut result));
+            assert_eq!(result, golden_result);
+        });
     }
 }
 
@@ -2036,10 +2527,6 @@ fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
@@ -2072,10 +2559,6 @@ fn f32x8_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
         _mm256_zeroupper();
     }
 }
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn f32x8_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
