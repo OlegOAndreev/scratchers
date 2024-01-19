@@ -86,16 +86,17 @@ pub fn mul_tile_simd_impl_8(
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn mul_tile_simd_impl_8(
-    m1: &[f32],
-    m2: &[f32],
-    md: &mut [f32],
-    ib: usize,
-    jb: usize,
-    kb: usize,
-    n: usize,
+    _m1: &[f32],
+    _m2: &[f32],
+    _md: &mut [f32],
+    _ib: usize,
+    _jb: usize,
+    _kb: usize,
+    _n: usize,
 ) {
-    unsafe {
-    }
+    unimplemented!()
+    // unsafe {
+    // }
 }
 
 #[inline(always)]

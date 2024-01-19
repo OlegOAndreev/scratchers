@@ -2,7 +2,8 @@
 
 use std::arch::asm;
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::{vdupq_n_f32, vst1q_f32};
+use std::arch::aarch64::{vaddq_f32, vdupq_n_f32, vfmaq_f32, vst1q_f32};
+use std::arch::aarch64::vld1q_f32;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use std::arch::x86_64::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps,
@@ -1618,7 +1619,37 @@ fn scalar_add_latency(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mu
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {}
+fn f32x4_add_latency_asm(iterations: usize, a: &[f32; 8], b: &[f32; 8], result: &mut [f32; 8]) {
+    assert_eq!(iterations % 4, 0);
+    unsafe {
+        asm!(
+        "ldp {a0:q}, {a1:q}, [{a}]",
+        "ldp {tmp0:q}, {tmp1:q}, [{b}]",
+        ".p2align 5",
+        "2:",
+        "fadd {a0}.4s, {a0}.4s, {tmp0}.4s",
+        "fadd {a1}.4s, {a1}.4s, {tmp1}.4s",
+        "fadd {a0}.4s, {a0}.4s, {tmp0}.4s",
+        "fadd {a1}.4s, {a1}.4s, {tmp1}.4s",
+        "fadd {a0}.4s, {a0}.4s, {tmp0}.4s",
+        "fadd {a1}.4s, {a1}.4s, {tmp1}.4s",
+        "fadd {a0}.4s, {a0}.4s, {tmp0}.4s",
+        "fadd {a1}.4s, {a1}.4s, {tmp1}.4s",
+        "subs {iterations}, {iterations}, #1",
+        "b.ne 2b",
+        "stp {a0:q}, {a1:q}, [{result}]",
+        a = in(reg) a.as_ptr(),
+        b = in(reg) b.as_ptr(),
+        result = in(reg) result.as_ptr(),
+        iterations = inout(reg) iterations / 4 => _,
+        a0 = out(vreg) _,
+        a1 = out(vreg) _,
+        tmp0 = out(vreg) _,
+        tmp1 = out(vreg) _,
+        options(nostack),
+        );
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -1771,6 +1802,58 @@ fn f32x4_fma(
     e: &[f32; 16],
     result: &mut [f32; 32],
 ) {
+    let ap = a.as_ptr();
+    let mut a0 = unsafe { vld1q_f32(ap) };
+    let mut a1 = unsafe { vld1q_f32(ap.add(4)) };
+    let mut a2 = unsafe { vld1q_f32(ap.add(8)) };
+    let mut a3 = unsafe { vld1q_f32(ap.add(12)) };
+    let mut a4 = unsafe { vld1q_f32(ap) };
+    let mut a5 = unsafe { vld1q_f32(ap.add(4)) };
+    let mut a6 = unsafe { vld1q_f32(ap.add(8)) };
+    let mut a7 = unsafe { vld1q_f32(ap.add(12)) };
+    let bp = b.as_ptr();
+    let b0 = unsafe { vld1q_f32(bp) };
+    let b1 = unsafe { vld1q_f32(bp.add(4)) };
+    let b2 = unsafe { vld1q_f32(bp.add(8)) };
+    let b3 = unsafe { vld1q_f32(bp.add(12)) };
+    let cp = c.as_ptr();
+    let c0 = unsafe { vld1q_f32(cp) };
+    let c1 = unsafe { vld1q_f32(cp.add(4)) };
+    let c2 = unsafe { vld1q_f32(cp.add(8)) };
+    let c3 = unsafe { vld1q_f32(cp.add(12)) };
+    let dp = d.as_ptr();
+    let d0 = unsafe { vld1q_f32(dp) };
+    let d1 = unsafe { vld1q_f32(dp.add(4)) };
+    let d2 = unsafe { vld1q_f32(dp.add(8)) };
+    let d3 = unsafe { vld1q_f32(dp.add(12)) };
+    let ep = e.as_ptr();
+    let e0 = unsafe { vld1q_f32(ep) };
+    let e1 = unsafe { vld1q_f32(ep.add(4)) };
+    let e2 = unsafe { vld1q_f32(ep.add(8)) };
+    let e3 = unsafe { vld1q_f32(ep.add(12)) };
+    for _ in 0..iterations {
+        unsafe {
+            a0 = vfmaq_f32(a0, b0, c0);
+            a1 = vfmaq_f32(a1, b1, c1);
+            a2 = vfmaq_f32(a2, b2, c2);
+            a3 = vfmaq_f32(a3, b3, c3);
+            a4 = vfmaq_f32(a4, d0, e0);
+            a5 = vfmaq_f32(a5, d1, e1);
+            a6 = vfmaq_f32(a6, d2, e2);
+            a7 = vfmaq_f32(a7, d3, e3);
+        }
+    }
+    unsafe {
+        let rp = result.as_mut_ptr();
+        vst1q_f32(rp, a0);
+        vst1q_f32(rp.add(4), a1);
+        vst1q_f32(rp.add(8), a2);
+        vst1q_f32(rp.add(12), a3);
+        vst1q_f32(rp.add(16), a4);
+        vst1q_f32(rp.add(20), a5);
+        vst1q_f32(rp.add(24), a6);
+        vst1q_f32(rp.add(28), a7);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1850,6 +1933,64 @@ fn f32x4_fma_asm(
     e: &[f32; 16],
     result: &mut [f32; 32],
 ) {
+    unsafe {
+        asm!(
+        "ld1 {{ {a0}.4s, {a1}.4s, {a2}.4s, {a3}.4s }}, [{a}]",
+        "ld1 {{ {a4}.4s, {a5}.4s, {a6}.4s, {a7}.4s }}, [{a}]",
+        "ld1 {{ {b0}.4s, {b1}.4s, {b2}.4s, {b3}.4s }}, [{b}]",
+        "ld1 {{ {c0}.4s, {c1}.4s, {c2}.4s, {c3}.4s }}, [{c}]",
+        "ld1 {{ {d0}.4s, {d1}.4s, {d2}.4s, {d3}.4s }}, [{d}]",
+        "ld1 {{ {e0}.4s, {e1}.4s, {e2}.4s, {e3}.4s }}, [{e}]",
+        ".p2align 5",
+        "2:",
+        "fmla {a0}.4s, {b0}.4s, {c0}.4s",
+        "fmla {a1}.4s, {b1}.4s, {c1}.4s",
+        "fmla {a2}.4s, {b2}.4s, {c2}.4s",
+        "fmla {a3}.4s, {b3}.4s, {c3}.4s",
+        "fmla {a4}.4s, {d0}.4s, {e0}.4s",
+        "fmla {a5}.4s, {d1}.4s, {e1}.4s",
+        "fmla {a6}.4s, {d2}.4s, {e2}.4s",
+        "fmla {a7}.4s, {d3}.4s, {e3}.4s",
+        "subs {iterations}, {iterations}, #1",
+        "b.ne 2b",
+        "stp {a0:q}, {a1:q}, [{result}]",
+        "stp {a2:q}, {a3:q}, [{result}, #32]",
+        "stp {a4:q}, {a5:q}, [{result}, #64]",
+        "stp {a6:q}, {a7:q}, [{result}, #96]",
+        a = in(reg) a.as_ptr(),
+        b = in(reg) b.as_ptr(),
+        c = in(reg) c.as_ptr(),
+        d = in(reg) d.as_ptr(),
+        e = in(reg) e.as_ptr(),
+        result = in(reg) result.as_ptr(),
+        iterations = inout(reg) iterations => _,
+        a0 = out(vreg) _,
+        a1 = out(vreg) _,
+        a2 = out(vreg) _,
+        a3 = out(vreg) _,
+        a4 = out(vreg) _,
+        a5 = out(vreg) _,
+        a6 = out(vreg) _,
+        a7 = out(vreg) _,
+        b0 = out(vreg) _,
+        b1 = out(vreg) _,
+        b2 = out(vreg) _,
+        b3 = out(vreg) _,
+        c0 = out(vreg) _,
+        c1 = out(vreg) _,
+        c2 = out(vreg) _,
+        c3 = out(vreg) _,
+        d0 = out(vreg) _,
+        d1 = out(vreg) _,
+        d2 = out(vreg) _,
+        d3 = out(vreg) _,
+        e0 = out(vreg) _,
+        e1 = out(vreg) _,
+        e2 = out(vreg) _,
+        e3 = out(vreg) _,
+        options(nostack),
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2117,7 +2258,56 @@ fn scalar_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
+    assert_eq!(rows % 4, 0);
+    let mut a0 = unsafe { vdupq_n_f32(0.0) };
+    let mut a1 = unsafe { vdupq_n_f32(0.0) };
+    let mut a2 = unsafe { vdupq_n_f32(0.0) };
+    let mut a3 = unsafe { vdupq_n_f32(0.0) };
+    let mut a4 = unsafe { vdupq_n_f32(0.0) };
+    let mut a5 = unsafe { vdupq_n_f32(0.0) };
+    let mut a6 = unsafe { vdupq_n_f32(0.0) };
+    let mut a7 = unsafe { vdupq_n_f32(0.0) };
+    for j in 0..rows / 4 {
+        unsafe {
+            let r00 = vld1q_f32(data.add(j * 4 * 16));
+            let r01 = vld1q_f32(data.add(j * 4 * 16 + 4));
+            let r02 = vld1q_f32(data.add(j * 4 * 16 + 8));
+            let r03 = vld1q_f32(data.add(j * 4 * 16 + 12));
+            let r10 = vld1q_f32(data.add((j * 4 + 1) * 16));
+            let r11 = vld1q_f32(data.add((j * 4 + 1) * 16 + 4));
+            let r12 = vld1q_f32(data.add((j * 4 + 1) * 16 + 8));
+            let r13 = vld1q_f32(data.add((j * 4 + 1) * 16 + 12));
+            a0 = vfmaq_f32(a0, r00, r10);
+            a1 = vfmaq_f32(a1, r01, r11);
+            a2 = vfmaq_f32(a2, r02, r12);
+            a3 = vfmaq_f32(a3, r03, r13);
+            let r00 = vld1q_f32(data.add((j * 4 + 2) * 16));
+            let r01 = vld1q_f32(data.add((j * 4 + 2) * 16 + 4));
+            let r02 = vld1q_f32(data.add((j * 4 + 2) * 16 + 8));
+            let r03 = vld1q_f32(data.add((j * 4 + 2) * 16 + 12));
+            let r10 = vld1q_f32(data.add((j * 4 + 3) * 16));
+            let r11 = vld1q_f32(data.add((j * 4 + 3) * 16 + 4));
+            let r12 = vld1q_f32(data.add((j * 4 + 3) * 16 + 8));
+            let r13 = vld1q_f32(data.add((j * 4 + 3) * 16 + 12));
+            a4 = vfmaq_f32(a4, r00, r10);
+            a5 = vfmaq_f32(a5, r01, r11);
+            a6 = vfmaq_f32(a6, r02, r12);
+            a7 = vfmaq_f32(a7, r03, r13);
+        }
+    }
+    unsafe {
+        let rp = result.as_mut_ptr();
+        vst1q_f32(rp, a0);
+        vst1q_f32(rp.add(4), a1);
+        vst1q_f32(rp.add(8), a2);
+        vst1q_f32(rp.add(12), a3);
+        vst1q_f32(rp.add(16), a4);
+        vst1q_f32(rp.add(20), a5);
+        vst1q_f32(rp.add(24), a6);
+        vst1q_f32(rp.add(28), a7);
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -2173,7 +2363,68 @@ fn f32x4_load_fma(data: *const f32, rows: usize, result: &mut [f32; 32]) {
 }
 
 #[cfg(target_arch = "aarch64")]
-fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+fn f32x4_load_fma_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
+    unsafe {
+        asm!(
+        "eor {a0}.16b, {a0}.16b, {a0}.16b",
+        "eor {a1}.16b, {a1}.16b, {a1}.16b",
+        "eor {a2}.16b, {a2}.16b, {a2}.16b",
+        "eor {a3}.16b, {a3}.16b, {a3}.16b",
+        "eor {a4}.16b, {a4}.16b, {a4}.16b",
+        "eor {a5}.16b, {a5}.16b, {a5}.16b",
+        "eor {a6}.16b, {a6}.16b, {a6}.16b",
+        "eor {a7}.16b, {a7}.16b, {a7}.16b",
+        ".p2align 5",
+        "2:",
+        "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], #64",
+        "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], #64",
+        "fmla {a0}.4s, {tmp0}.4s, {tmp4}.4s",
+        "fmla {a1}.4s, {tmp1}.4s, {tmp5}.4s",
+        "fmla {a2}.4s, {tmp2}.4s, {tmp6}.4s",
+        "fmla {a3}.4s, {tmp3}.4s, {tmp7}.4s",
+        "ld1 {{ {tmp8}.4s, {tmp9}.4s, {tmp10}.4s, {tmp11}.4s }}, [{data}], #64",
+        "ld1 {{ {tmp12}.4s, {tmp13}.4s, {tmp14}.4s, {tmp15}.4s }}, [{data}], #64",
+        "fmla {a4}.4s, {tmp8}.4s, {tmp12}.4s",
+        "fmla {a5}.4s, {tmp9}.4s, {tmp13}.4s",
+        "fmla {a6}.4s, {tmp10}.4s, {tmp14}.4s",
+        "fmla {a7}.4s, {tmp11}.4s, {tmp15}.4s",
+        "cmp {data}, {data_end}",
+        "b.lo 2b",
+        "stp {a0:q}, {a1:q}, [{result}]",
+        "stp {a2:q}, {a3:q}, [{result}, #32]",
+        "stp {a4:q}, {a5:q}, [{result}, #64]",
+        "stp {a6:q}, {a7:q}, [{result}, #96]",
+        data = in(reg) data,
+        data_end = in(reg) data.add(rows * 16),
+        result = in(reg) result.as_ptr(),
+        a0 = out(vreg) _,
+        a1 = out(vreg) _,
+        a2 = out(vreg) _,
+        a3 = out(vreg) _,
+        a4 = out(vreg) _,
+        a5 = out(vreg) _,
+        a6 = out(vreg) _,
+        a7 = out(vreg) _,
+        tmp0 = out(vreg) _,
+        tmp1 = out(vreg) _,
+        tmp2 = out(vreg) _,
+        tmp3 = out(vreg) _,
+        tmp4 = out(vreg) _,
+        tmp5 = out(vreg) _,
+        tmp6 = out(vreg) _,
+        tmp7 = out(vreg) _,
+        tmp8 = out(vreg) _,
+        tmp9 = out(vreg) _,
+        tmp10 = out(vreg) _,
+        tmp11 = out(vreg) _,
+        tmp12 = out(vreg) _,
+        tmp13 = out(vreg) _,
+        tmp14 = out(vreg) _,
+        tmp15 = out(vreg) _,
+        options(nostack),
+        );
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -2393,7 +2644,56 @@ fn scalar_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
+    assert_eq!(rows % 4, 0);
+    let mut a0 = unsafe { vdupq_n_f32(0.0) };
+    let mut a1 = unsafe { vdupq_n_f32(0.0) };
+    let mut a2 = unsafe { vdupq_n_f32(0.0) };
+    let mut a3 = unsafe { vdupq_n_f32(0.0) };
+    let mut a4 = unsafe { vdupq_n_f32(0.0) };
+    let mut a5 = unsafe { vdupq_n_f32(0.0) };
+    let mut a6 = unsafe { vdupq_n_f32(0.0) };
+    let mut a7 = unsafe { vdupq_n_f32(0.0) };
+    for j in 0..rows / 4 {
+        unsafe {
+            let r00 = vld1q_f32(data.add(j * 4 * 16));
+            let r01 = vld1q_f32(data.add(j * 4 * 16 + 4));
+            let r02 = vld1q_f32(data.add(j * 4 * 16 + 8));
+            let r03 = vld1q_f32(data.add(j * 4 * 16 + 12));
+            let r10 = vld1q_f32(data.add((j * 4 + 1) * 16));
+            let r11 = vld1q_f32(data.add((j * 4 + 1) * 16 + 4));
+            let r12 = vld1q_f32(data.add((j * 4 + 1) * 16 + 8));
+            let r13 = vld1q_f32(data.add((j * 4 + 1) * 16 + 12));
+            a0 = vaddq_f32(a0, vaddq_f32(r00, r10));
+            a1 = vaddq_f32(a1, vaddq_f32(r01, r11));
+            a2 = vaddq_f32(a2, vaddq_f32(r02, r12));
+            a3 = vaddq_f32(a3, vaddq_f32(r03, r13));
+            let r00 = vld1q_f32(data.add((j * 4 + 2) * 16));
+            let r01 = vld1q_f32(data.add((j * 4 + 2) * 16 + 4));
+            let r02 = vld1q_f32(data.add((j * 4 + 2) * 16 + 8));
+            let r03 = vld1q_f32(data.add((j * 4 + 2) * 16 + 12));
+            let r10 = vld1q_f32(data.add((j * 4 + 3) * 16));
+            let r11 = vld1q_f32(data.add((j * 4 + 3) * 16 + 4));
+            let r12 = vld1q_f32(data.add((j * 4 + 3) * 16 + 8));
+            let r13 = vld1q_f32(data.add((j * 4 + 3) * 16 + 12));
+            a4 = vaddq_f32(a4, vaddq_f32(r00, r10));
+            a5 = vaddq_f32(a5, vaddq_f32(r01, r11));
+            a6 = vaddq_f32(a6, vaddq_f32(r02, r12));
+            a7 = vaddq_f32(a7, vaddq_f32(r03, r13));
+        }
+    }
+    unsafe {
+        let rp = result.as_mut_ptr();
+        vst1q_f32(rp, a0);
+        vst1q_f32(rp.add(4), a1);
+        vst1q_f32(rp.add(8), a2);
+        vst1q_f32(rp.add(12), a3);
+        vst1q_f32(rp.add(16), a4);
+        vst1q_f32(rp.add(20), a5);
+        vst1q_f32(rp.add(24), a6);
+        vst1q_f32(rp.add(28), a7);
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -2450,7 +2750,76 @@ fn f32x4_load_add(data: *const f32, rows: usize, result: &mut [f32; 32]) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {}
+fn f32x4_load_add_asm(data: *const f32, rows: usize, result: &mut [f32; 32]) {
+    unsafe {
+        asm!(
+        "eor {a0}.16b, {a0}.16b, {a0}.16b",
+        "eor {a1}.16b, {a1}.16b, {a1}.16b",
+        "eor {a2}.16b, {a2}.16b, {a2}.16b",
+        "eor {a3}.16b, {a3}.16b, {a3}.16b",
+        "eor {a4}.16b, {a4}.16b, {a4}.16b",
+        "eor {a5}.16b, {a5}.16b, {a5}.16b",
+        "eor {a6}.16b, {a6}.16b, {a6}.16b",
+        "eor {a7}.16b, {a7}.16b, {a7}.16b",
+        ".p2align 5",
+        "2:",
+        "ld1 {{ {tmp0}.4s, {tmp1}.4s, {tmp2}.4s, {tmp3}.4s }}, [{data}], #64",
+        "ld1 {{ {tmp4}.4s, {tmp5}.4s, {tmp6}.4s, {tmp7}.4s }}, [{data}], #64",
+        "fadd {tmp0}.4s, {tmp0}.4s, {tmp4}.4s",
+        "fadd {tmp1}.4s, {tmp1}.4s, {tmp5}.4s",
+        "fadd {tmp2}.4s, {tmp2}.4s, {tmp6}.4s",
+        "fadd {tmp3}.4s, {tmp3}.4s, {tmp7}.4s",
+        "fadd {a0}.4s, {a0}.4s, {tmp0}.4s",
+        "fadd {a1}.4s, {a1}.4s, {tmp1}.4s",
+        "fadd {a2}.4s, {a2}.4s, {tmp2}.4s",
+        "fadd {a3}.4s, {a3}.4s, {tmp3}.4s",
+        "ld1 {{ {tmp8}.4s, {tmp9}.4s, {tmp10}.4s, {tmp11}.4s }}, [{data}], #64",
+        "ld1 {{ {tmp12}.4s, {tmp13}.4s, {tmp14}.4s, {tmp15}.4s }}, [{data}], #64",
+        "fadd {tmp8}.4s, {tmp8}.4s, {tmp12}.4s",
+        "fadd {tmp9}.4s, {tmp9}.4s, {tmp13}.4s",
+        "fadd {tmp10}.4s, {tmp10}.4s, {tmp14}.4s",
+        "fadd {tmp11}.4s, {tmp11}.4s, {tmp15}.4s",
+        "fadd {a4}.4s, {a4}.4s, {tmp8}.4s",
+        "fadd {a5}.4s, {a5}.4s, {tmp9}.4s",
+        "fadd {a6}.4s, {a6}.4s, {tmp10}.4s",
+        "fadd {a7}.4s, {a7}.4s, {tmp11}.4s",
+        "cmp {data}, {data_end}",
+        "b.lo 2b",
+        "stp {a0:q}, {a1:q}, [{result}]",
+        "stp {a2:q}, {a3:q}, [{result}, #32]",
+        "stp {a4:q}, {a5:q}, [{result}, #64]",
+        "stp {a6:q}, {a7:q}, [{result}, #96]",
+        data = in(reg) data,
+        data_end = in(reg) data.add(rows * 16),
+        result = in(reg) result.as_ptr(),
+        a0 = out(vreg) _,
+        a1 = out(vreg) _,
+        a2 = out(vreg) _,
+        a3 = out(vreg) _,
+        a4 = out(vreg) _,
+        a5 = out(vreg) _,
+        a6 = out(vreg) _,
+        a7 = out(vreg) _,
+        tmp0 = out(vreg) _,
+        tmp1 = out(vreg) _,
+        tmp2 = out(vreg) _,
+        tmp3 = out(vreg) _,
+        tmp4 = out(vreg) _,
+        tmp5 = out(vreg) _,
+        tmp6 = out(vreg) _,
+        tmp7 = out(vreg) _,
+        tmp8 = out(vreg) _,
+        tmp9 = out(vreg) _,
+        tmp10 = out(vreg) _,
+        tmp11 = out(vreg) _,
+        tmp12 = out(vreg) _,
+        tmp13 = out(vreg) _,
+        tmp14 = out(vreg) _,
+        tmp15 = out(vreg) _,
+        options(nostack),
+        );
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
