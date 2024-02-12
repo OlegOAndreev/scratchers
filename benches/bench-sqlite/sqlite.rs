@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use rand::Rng;
-use rusqlite::{params, Connection};
-use std::sync::Arc;
+use rusqlite::{params, Connection, OpenFlags};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{env, thread, time};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
             for _ in 0..4 {
                 let row_ids_ref = row_ids_copy.clone();
                 let h = thread::spawn(move || -> Result<()> {
-                    let mut conn = Connection::open("db-with-journal")?;
+                    let mut conn = Connection::open_with_flags("db-with-journal", OpenFlags::SQLITE_OPEN_READ_ONLY)?;
                     do_select(&mut conn, "normal", &row_ids_ref)?;
                     Ok(())
                 });
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
             for _ in 0..4 {
                 let row_ids_ref = row_ids_copy.clone();
                 let h = thread::spawn(move || -> Result<()> {
-                    let mut conn = Connection::open("db-with-wal")?;
+                    let mut conn = Connection::open_with_flags("db-with-wal", OpenFlags::SQLITE_OPEN_READ_ONLY)?;
                     do_select(&mut conn, "normal", &row_ids_ref)?;
                     Ok(())
                 });
@@ -185,7 +185,7 @@ fn main() -> Result<()> {
 
             let row_ids_copy = Arc::new(row_ids.clone());
             let handle = thread::spawn(move || -> Result<()> {
-                let mut conn = Connection::open("db-with-wal")?;
+                let mut conn = Connection::open_with_flags("db-with-wal", OpenFlags::SQLITE_OPEN_READ_ONLY)?;
                 do_select(&mut conn, "normal", &row_ids_copy)?;
                 do_select(&mut conn, "normal", &row_ids_copy)?;
                 do_select(&mut conn, "normal", &row_ids_copy)?;
@@ -215,7 +215,7 @@ fn main() -> Result<()> {
             for _ in 0..4 {
                 let row_ids_ref = row_ids_copy.clone();
                 let h = thread::spawn(move || -> Result<()> {
-                    let mut conn = Connection::open("db-with-wal")?;
+                    let mut conn = Connection::open_with_flags("db-with-wal", OpenFlags::SQLITE_OPEN_READ_ONLY)?;
                     do_select(&mut conn, "normal", &row_ids_ref)?;
                     Ok(())
                 });
@@ -270,8 +270,10 @@ fn do_query_test(conn: &mut Connection, rconns: Vec<Connection>) -> Result<()> {
 
     let mut handles = vec![];
     let got = Arc::new(AtomicUsize::new(0));
+    let writer_mutex = Arc::new(Mutex::new(()));
     for rconn in rconns {
         let got_ref = got.clone();
+        let writer_mutex_ref = writer_mutex.clone();
         let h = thread::spawn(move || -> Result<()> {
             let rstart = Instant::now();
             let mut row_ids = vec![];
@@ -298,6 +300,7 @@ fn do_query_test(conn: &mut Connection, rconns: Vec<Connection>) -> Result<()> {
                 }
                 let mut deleted = 0;
                 for &row_id in &row_ids {
+                    let _guard = writer_mutex_ref.lock();
                     deleted += delete_stmt
                         .execute(params![row_id])
                         .context("EXEC DELETE FROM do_query_test")?;
@@ -305,7 +308,7 @@ fn do_query_test(conn: &mut Connection, rconns: Vec<Connection>) -> Result<()> {
                 row_ids.clear();
 
                 let prev = got_ref.fetch_add(deleted, Ordering::Relaxed);
-                if prev + deleted == NUM_ELEMS {
+                if prev + deleted >= NUM_ELEMS {
                     break
                 }
 
@@ -326,6 +329,7 @@ fn do_query_test(conn: &mut Connection, rconns: Vec<Connection>) -> Result<()> {
         .prepare("INSERT INTO queue VALUES (?1)")
         .context("PREPARE INSERT INTO do_query_test")?;
     for line in lines {
+        let _guard = writer_mutex.lock();
         stmt.execute(params![line])
             .context("EXEC INSERT INTO do_query_test")?;
     }
