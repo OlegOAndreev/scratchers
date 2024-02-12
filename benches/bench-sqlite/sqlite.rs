@@ -4,6 +4,7 @@ use rusqlite::{params, Connection};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{env, thread, time};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use time::Duration;
 
 fn main() -> Result<()> {
@@ -23,9 +24,9 @@ fn main() -> Result<()> {
             conn.execute("PRAGMA synchronous = full", ())
                 .context("PRAGMA synchronous")?;
             let mut row_ids = vec![];
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             delete_row_ids(&mut conn, "normal", &mut row_ids)?;
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             drop(conn);
 
             let row_ids_copy = Arc::new(row_ids.clone());
@@ -52,9 +53,9 @@ fn main() -> Result<()> {
             conn.execute("PRAGMA synchronous = full", ())
                 .context("PRAGMA synchronous")?;
             let mut row_ids = vec![];
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             delete_row_ids(&mut conn, "normal", &mut row_ids)?;
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             do_select(&mut conn, "normal", &row_ids)?;
         }
         "insert-each-line" => {
@@ -94,9 +95,9 @@ fn main() -> Result<()> {
             conn.execute("PRAGMA synchronous = full", ())
                 .context("PRAGMA synchronous")?;
             let mut row_ids = vec![];
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             delete_row_ids(&mut conn, "normal", &mut row_ids)?;
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             do_select(&mut conn, "normal", &row_ids)?;
         }
         "wal-insert-normal" => {
@@ -108,9 +109,9 @@ fn main() -> Result<()> {
             conn.execute("PRAGMA synchronous = normal", ())
                 .context("PRAGMA synchronous")?;
             let mut row_ids = vec![];
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             delete_row_ids(&mut conn, "normal", &mut row_ids)?;
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             do_select(&mut conn, "normal", &row_ids)?;
         }
         "wal-concurrent-readers" => {
@@ -122,9 +123,9 @@ fn main() -> Result<()> {
             conn.execute("PRAGMA synchronous = normal", ())
                 .context("PRAGMA synchronous")?;
             let mut row_ids = vec![];
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             delete_row_ids(&mut conn, "normal", &mut row_ids)?;
-            do_insert(&mut conn, "normal", 5000000, &mut row_ids)?;
+            do_insert(&mut conn, "normal", 2000000, &mut row_ids)?;
             drop(conn);
 
             let row_ids_copy = Arc::new(row_ids.clone());
@@ -237,7 +238,22 @@ fn main() -> Result<()> {
                 .context("PRAGMA synchronous")?;
 
             let rconn = Connection::open("db-queue")?;
-            do_query_test(&mut conn, rconn)?;
+            do_query_test(&mut conn, vec![rconn])?;
+        }
+        "queue-concurrent" => {
+            let mut conn = Connection::open("db-queue")?;
+            conn.query_row("PRAGMA journal_mode = wal", (), |_| Ok(()))
+                .context("PRAGMA journal_mode")?;
+            conn.execute("PRAGMA auto_vacuum = full", ())
+                .context("PRAGMA auto_vacuum failed")?;
+            conn.execute("PRAGMA synchronous = normal", ())
+                .context("PRAGMA synchronous")?;
+
+            let mut rconns = vec![];
+            for _ in 0..4 {
+                rconns.push(Connection::open("db-queue")?);
+            }
+            do_query_test(&mut conn, rconns)?;
         }
         _ => bail!("Unknown action {}", action),
     }
@@ -245,56 +261,65 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn do_query_test(conn: &mut Connection, rconn: Connection) -> Result<()> {
+fn do_query_test(conn: &mut Connection, rconns: Vec<Connection>) -> Result<()> {
     conn.execute("CREATE TABLE IF NOT EXISTS queue (col TEXT)", ())
         .context("CREATE TABLE do_query_test")?;
 
     const NUM_ELEMS: usize = 100000;
     let lines = generate_random_ascii_lines(NUM_ELEMS, 20, 200);
 
-    let h = thread::spawn(move || -> Result<()> {
-        let mut got = 0;
+    let mut handles = vec![];
+    let got = Arc::new(AtomicUsize::new(0));
+    for rconn in rconns {
+        let got_ref = got.clone();
+        let h = thread::spawn(move || -> Result<()> {
+            let rstart = Instant::now();
+            let mut row_ids = vec![];
+            let mut stmt = rconn
+                .prepare("SELECT rowid, col FROM queue ORDER BY rowid LIMIT 1000")
+                .context("PREPARE SELECT do_query_test")?;
+            let mut delete_stmt = rconn
+                .prepare("DELETE FROM queue WHERE rowid = ?1")
+                .context("PREPARE DELETE FROM do_query_test")?;
+            loop {
+                let mut rows = stmt
+                    .query(())
+                    .context("EXEC SELECT do_query_test")?;
+                while let Some(row) = rows
+                    .next()
+                    .context("EXEC SELECT next do_query_test")?
+                {
+                    row_ids.push(
+                        row.get_ref(0)
+                            .context("EXEC SELECT get_ref do_query_test")?
+                            .as_i64()
+                            .context("EXEC SELECT deref do_query_test")?,
+                    );
+                }
+                let mut deleted = 0;
+                for &row_id in &row_ids {
+                    deleted += delete_stmt
+                        .execute(params![row_id])
+                        .context("EXEC DELETE FROM do_query_test")?;
+                }
+                row_ids.clear();
 
-        let rstart = Instant::now();
-        let mut row_ids = vec![];
-        let mut stmt = rconn
-            .prepare("SELECT rowid, col FROM queue ORDER BY rowid LIMIT 1000")
-            .context("PREPARE SELECT do_query_test")?;
-        let mut delete_stmt = rconn
-            .prepare("DELETE FROM queue WHERE rowid = ?1")
-            .context("PREPARE DELETE FROM do_query_test")?;
-        while got < NUM_ELEMS {
-            let mut rows = stmt
-                .query(())
-                .context("EXEC SELECT do_query_test")?;
-            while let Some(row) = rows
-                .next()
-                .context("EXEC SELECT next do_query_test")?
-            {
-                row_ids.push(
-                    row.get_ref(0)
-                        .context("EXEC SELECT get_ref do_query_test")?
-                        .as_i64()
-                        .context("EXEC SELECT deref do_query_test")?,
-                );
+                let prev = got_ref.fetch_add(deleted, Ordering::Relaxed);
+                if prev + deleted == NUM_ELEMS {
+                    break
+                }
+
+                thread::sleep(Duration::from_millis(1));
             }
-            got += row_ids.len();
 
-            for &row_id in &row_ids {
-                delete_stmt
-                    .execute(params![row_id])
-                    .context("EXEC DELETE FROM do_query_test")?;
-            }
-            row_ids.clear();
+            let elapsed = rstart.elapsed();
+            let per_elem = elapsed / NUM_ELEMS as u32;
+            println!("Consumed {} elems in {:?} ({:?} per elem)", NUM_ELEMS, rstart.elapsed(), per_elem);
+            Ok(())
+        });
+        handles.push(h);
+    }
 
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        let elapsed = rstart.elapsed();
-        let per_elem = elapsed / NUM_ELEMS as u32;
-        println!("Consumed {} elems in {:?} ({:?} per elem)", NUM_ELEMS, rstart.elapsed(), per_elem);
-        Ok(())
-    });
 
     let start = Instant::now();
     let mut stmt = conn
@@ -308,7 +333,9 @@ fn do_query_test(conn: &mut Connection, rconn: Connection) -> Result<()> {
     let per_elem = elapsed / NUM_ELEMS as u32;
     println!("Produced {} elems in {:?} ({:?} per elem)", NUM_ELEMS, start.elapsed(), per_elem);
 
-    h.join().unwrap()?;
+    for h in handles {
+        h.join().unwrap()?;
+    }
 
     Ok(())
 }
