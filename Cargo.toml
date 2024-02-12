@@ -34,14 +34,19 @@ harness = false
 name = "bits"
 path = "benches/bench-bits/bits.rs"
 
+[[bin]]
+name = "sqlite"
+path = "benches/bench-sqlite/sqlite.rs"
+required-features = ["sqlite"]
+
 [dependencies]
 anyhow = "^1.0"
 ash = { version = "^0.37", optional = true }
 bytemuck = { version = "^1.12", features = ["derive"] }
 crossbeam = { version = "^0.8", optional = true }
-fyrox-sound = { version = "0.31.0", optional = true }
+fyrox-sound = { version = "0.34.0", optional = true }
 futures = { version = "^0.3", features = ["thread-pool"], optional = true }
-gpu-allocator = { version = "^0.22", features = ["vulkan"], optional = true }
+gpu-allocator = { version = "^0.25", features = ["vulkan"], optional = true }
 hound = "^3.5"
 libc = "^0.2"
 log = "^0.4"
@@ -53,6 +58,7 @@ rand = "^0.8"
 rayon = { version = "^1.6", optional = true }
 rodio = { version = "^0.17", optional = true }
 rubato = { version = "^0.14", optional = true }
+rusqlite = { version = "^0.30", features = ["bundled"], optional = true }
 samplerate = { version = "^0.2", optional = true }
 # Newest SDL2 required for building with NDK.
 sdl2 = { git = "https://github.com/Rust-SDL2/rust-sdl2", features = ["bundled"], optional = true }
@@ -68,7 +74,7 @@ iai = "^0.1"
 anyhow = "^1.0"
 glob = "^0.3"
 cc = "^1.0"
-env_logger = "^0.10"
+env_logger = "^0.11"
 log = "^0.4"
 
 [features]
@@ -82,6 +88,7 @@ rodio = ["dep:rodio"]
 rubato = ["dep:rubato"]
 samplerate = ["dep:samplerate"]
 sdl2 = ["dep:sdl2"]
+sqlite = ["dep:rusqlite"]
 speexdsp-resampler = ["dep:speexdsp-resampler"]
 tokio = ["futures", "dep:tokio"]
 vulkan = ["dep:ash", "dep:gpu-allocator"]
