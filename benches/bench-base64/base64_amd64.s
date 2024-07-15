@@ -11,8 +11,8 @@ DATA nextMap<>(SB)/1, $0x10
 GLOBL nextMap<>(SB), RODATA, $1
 
 // '='
-#define padding 0x3d000000
-#define doublePadding 0x3d3d0000
+#define padding 0x3d0000
+#define doublePadding 0x3d3d00
 
 TEXT ·base64EncodeAvx2Asm(SB), $0-40
     MOVQ dst+0(FP), DI
@@ -25,32 +25,86 @@ TEXT ·base64EncodeAvx2Asm(SB), $0-40
     JGE simd_start
 
 plain_main_loop:
-    CMPQ CX, $2
+    CMPQ CX, $3
     JB plain_tail
 
-    // R11 = dst quad, AX = src triple
-    MOVL (SI), AX
-    BSWAPL AX
+    // R11 = dst quads, AX = src triples
+    MOVQ (SI), AX
+    BSWAPQ AX
 
     MOVQ AX, R10
-    SHRQ $8, R10
+    SHRQ $16, R10
     ANDQ $63, R10
     MOVBLZX (R8)(R10*1), R11
     SHLQ $16, R11
-
     MOVQ AX, R10
-    SHRQ $14, R10
+    SHRQ $22, R10
     ANDQ $63, R10
     MOVBLZX (R8)(R10*1), R12
     SHLQ $16, R12
-
     MOVQ AX, R10
-    SHRQ $20, R10
+    SHRQ $28, R10
+    ANDQ $63, R10
+    MOVB (R8)(R10*1), R11
+    SHLQ $16, R11
+    MOVQ AX, R10
+    SHRQ $34, R10
+    ANDQ $63, R10
+    MOVB (R8)(R10*1), R12
+    SHLQ $16, R12
+    MOVQ AX, R10
+    SHRQ $40, R10
+    ANDQ $63, R10
+    MOVB (R8)(R10*1), R11
+    SHLQ $16, R11
+    MOVQ AX, R10
+    SHRQ $46, R10
+    ANDQ $63, R10
+    MOVB (R8)(R10*1), R12
+    SHLQ $16, R12
+    MOVQ AX, R10
+    SHRQ $52, R10
     ANDQ $63, R10
     MOVB (R8)(R10*1), R11
     SHLQ $8, R11
+    SHRQ $58, AX
+    MOVB (R8)(AX*1), R12
 
-    SHRQ $26, AX
+    ORQ R12, R11
+    MOVQ R11, (DI)
+
+    ADDQ $6, SI
+    ADDQ $8, DI
+    SUBQ $2, CX
+    JMP plain_main_loop
+
+plain_tail:
+    // CX = 0..2 remaining triples, DX = 0..2 remainder
+    TESTQ CX, CX
+    JZ plain_remainder
+
+plain_tail_body:
+    // R11 = dst quad, AX = src triple
+    MOVBLZX (SI), AX
+    SHLQ $8, AX
+    MOVB 1(SI), AX
+    SHLQ $8, AX
+    MOVB 2(SI), AX
+    MOVQ AX, R10
+    ANDQ $63, R10
+    MOVBLZX (R8)(R10*1), R11
+    SHLQ $16, R11
+    MOVQ AX, R10
+    SHRQ $6, R10
+    ANDQ $63, R10
+    MOVBLZX (R8)(R10*1), R12
+    SHLQ $16, R12
+    MOVQ AX, R10
+    SHRQ $12, R10
+    ANDQ $63, R10
+    MOVB (R8)(R10*1), R11
+    SHLQ $8, R11
+    SHRQ $18, AX
     MOVB (R8)(AX*1), R12
 
     ORQ R12, R11
@@ -59,46 +113,7 @@ plain_main_loop:
     ADDQ $3, SI
     ADDQ $4, DI
     DECQ CX
-    JMP plain_main_loop
-
-plain_tail:
-    // CX = 0..1 remaining triples, DX = 0..2 remainder
-    TESTQ CX, CX
-    JZ plain_remainder
-
-    // R11 = dst quad, AX = src triple
-    MOVBLZX (SI), AX
-    SHLQ $8, AX
-    MOVB 1(SI), AX
-    SHLQ $8, AX
-    MOVB 2(SI), AX
-
-    MOVQ AX, R10
-    ANDQ $63, R10
-    MOVBLZX (R8)(R10*1), R11
-    SHLQ $24, R11
-
-    MOVQ AX, R10
-    SHRQ $6, R10
-    ANDQ $63, R10
-    MOVBLZX (R8)(R10*1), R12
-    SHLQ $16, R12
-    ORQ R12, R11
-
-    MOVQ AX, R10
-    SHRQ $12, R10
-    ANDQ $63, R10
-    MOVBLZX (R8)(R10*1), R13
-    SHLQ $8, R13
-    ORQ R13, R11
-
-    SHRQ $18, AX
-    MOVB (R8)(AX*1), R11
-
-    MOVL R11, (DI)
-
-    ADDQ $3, SI
-    ADDQ $4, DI
+    JNZ plain_tail_body
 
 plain_remainder:
     CMPQ DX, $1
@@ -106,29 +121,25 @@ plain_remainder:
     JE plain_remainder_1
 
     // DX = 2
-    MOVL $padding, R11
-
     MOVBLZX (SI), AX
     SHLQ $8, AX
     MOVB 1(SI), AX
 
+    MOVL $padding, R11
     MOVQ AX, R10
     SHLQ $2, R10
     ANDQ $63, R10
     MOVBLZX (R8)(R10*1), R12
     SHLQ $16, R12
-    ORQ R12, R11
-
     MOVQ AX, R10
     SHRQ $4, R10
     ANDQ $63, R10
-    MOVBLZX (R8)(R10*1), R13
-    SHLQ $8, R13
-    ORQ R13, R11
-
+    MOVB (R8)(R10*1), R11
+    SHLQ $8, R11
     SHRQ $10, AX
-    MOVB (R8)(AX*1), R11
+    MOVB (R8)(AX*1), R12
 
+    ORQ R12, R11
     MOVL R11, (DI)
     ADDQ $4, DI
 
@@ -136,17 +147,14 @@ plain_remainder:
 
 plain_remainder_1:
     // DX = 1
-    MOVL $doublePadding, R11
-
     MOVBLZX (SI), AX
 
+    MOVL $doublePadding, R11
     MOVQ AX, R10
     SHLQ $4, R10
     ANDQ $63, R10
-    MOVBLZX (R8)(R10*1), R12
-    SHLQ $8, R12
-    ORQ R12, R11
-
+    MOVB (R8)(R10*1), R11
+    SHLQ $8, R11
     SHRQ $2, AX
     MOVB (R8)(AX*1), R11
 
@@ -154,6 +162,7 @@ plain_remainder_1:
     ADDQ $4, DI
 
 finish:
+    VZEROUPPER
     RET
 
 simd_start:
@@ -185,6 +194,7 @@ simd_main_loop:
     VMOVDQU (SI), X0
     VINSERTI128 $1, 12(SI), Y0, Y0
 
+simd_main_loop_body:
     VPSHUFB Y6, Y0, Y0
     VPSRLD $4, Y0, Y1
     VPAND Y7, Y1, Y1
@@ -227,77 +237,69 @@ simd_main_loop:
     ADDQ $32, DI
 
     SUBQ $8, CX
+    // This can happend if simd_tail jumped back to simd_main_loop_body and CX was 8.
+    JZ plain_remainder
     JMP simd_main_loop
 
 simd_tail:
-    // CX = 1..10 remaining triples. The main problem is not doing out-of-bounds loads. Depending on the CX:
-    //  1..4: single XMM load aligned with the end (the buffer contains at least 6 triples)
-    //  5: two XMM loads: one aligned with the end triple and one with prev triple
-    //  6..8: two XMM loads: one aligned with the start of remainder and one aligned with the end
-    //  9: first 8 triples are processed and then the last triple is processed by looping to the 1..4 case
+    // CX = 1..9 remaining triples. The main problem is not doing out-of-bounds loads. For CX:
+    //  1..4: single XMM load aligned with the end of tail (the buffer contains at least 6 triples)
+    //  5: fix up the SI and DI and use 6..7 case
+    //  6..7: two XMM loads: one aligned with the start of tail and one aligned with the end
+    //  8..9: two XMM loads: one aligned with the start of tail and one aligned with the end, main loop body is reused,
+    //        then simd_tail is re-entered again
     // All cases are processed by the same code, the only difference in the prolog: input must be in Y0,
     // the destinations for two processed halves in R11 and R12, SI and DI updated accordingly.
-
-    // R9 = CX*3 (src remaining bytes), R10 = CX*4 (dst remaining bytes)
-    LEAQ (CX)(CX*2), R9
-    LEAQ (CX*4), R10
 
     CMPQ CX, $5
     JB simd_tail_1_4
     JE simd_tail_5
-    CMPQ CX, $9
-    JB simd_tail_6_8
+    CMPQ CX, $8
+    JB simd_tail_6_7
 
-    // CX = 9. Fix the byte sizes and remaining triples and pass to 6..8.
-    MOVQ $1, CX
-    MOVQ $24, R9
-    MOVQ $32, R10
-    JMP simd_tail_6_8_main
-
-simd_tail_6_8:
-    // CX = 6..8
-    XORQ CX, CX
-simd_tail_6_8_main:
+    // CX = 8..9. Do two loads into Y0 and pass back to main loop.
     VMOVDQU (SI), X0
+    VMOVDQU 8(SI), X1
+    VPSRLDQ $4, X1, X1
+    VINSERTI128 $1, X1, Y0, Y0
+    JMP simd_main_loop_body
+
+simd_tail_5:
+    // CX = 5
+    INCQ CX
+    SUBQ $3, SI
+    SUBQ $4, DI
+    // Pass-through to 6..7 case
+
+simd_tail_6_7:
+    // CX = 6..7
+    VMOVDQU (SI), X0
+    LEAQ (CX)(CX*2), R9
     ADDQ R9, SI
     VMOVDQU -16(SI), X1
     VPSRLDQ $4, X1, X1
     VINSERTI128 $1, X1, Y0, Y0
 
     MOVQ DI, R11
-    ADDQ R10, DI
+    LEAQ (DI)(CX*4), DI
     LEAQ -16(DI), R12
-
-    JMP simd_tail_main
-
-simd_tail_5:
-    // CX = 5
-    XORQ CX, CX
-
-    VMOVDQU -4(SI), X0
-    VINSERTI128 $1, -1(SI), Y0, Y0
-    VPSRLDQ $4, Y0, Y0
-    ADDQ R9, SI
-
-    MOVQ DI, R11
-    LEAQ 4(DI), R12
-    ADDQ R10, DI
 
     JMP simd_tail_main
 
 simd_tail_1_4:
-    // CX = 1..4
-    XORQ CX, CX
-
+    // CX = 1..4, mirror both halves
+    LEAQ (CX)(CX*2), R9
     ADDQ R9, SI
-    VBROADCASTI128 -16(SI),Y0
+    VBROADCASTI128 -16(SI), Y0
     VPSRLDQ $4, Y0, Y0
 
-    ADDQ R10, DI
+    LEAQ (DI)(CX*4), DI
     LEAQ -16(DI), R11
-    LEAQ -16(DI), R12
+    MOVQ R11, R12
 
 simd_tail_main:
+    XORQ CX, CX
+
     // This is a carbon copy of the main loop.
     VPSHUFB Y6, Y0, Y0
     VPSRLD $4, Y0, Y1
@@ -330,10 +332,4 @@ simd_tail_main:
 
     VMOVDQU X2, (R11)
     VEXTRACTI128 $1, Y2, (R12)
-
-    // Special processing for 9 remaining triples
-    TESTQ CX, CX
-    JNZ simd_tail
-
-    VZEROUPPER
     JMP plain_remainder
