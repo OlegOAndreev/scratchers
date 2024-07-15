@@ -10,14 +10,11 @@ func Base64EncodeAvx2(dst []byte, src []byte) []byte {
 		return dst
 	}
 
-	resultLen := (len(src) + 2) / 3 * 4
-	if resultLen < 4 {
-		panic("oh no")
-	}
-	result := appendBytes(dst, resultLen)
 	// I really don't want to do the div -> mul conversion for assembly
 	numTriples := len(src) / 3
 	remainder := len(src) % 3
+	resultLen := (len(src) + 2) / 3 * 4
+	result := appendBytes(dst, resultLen)
 	base64EncodeAvx2Asm(&result[len(dst)], &src[0], &encodeMap[0], numTriples, remainder)
 	return result
 }

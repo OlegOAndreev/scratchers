@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"fmt"
 	"log"
 	"math/rand/v2"
 	"os"
@@ -12,14 +11,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 )
 
+const benchAtLeast = time.Second * 2
+
 func main() {
-	src := []byte("123")
-	//src := []byte("1234567890abcdefgh")
-	fmt.Printf("%q\n", string(Base64EncodeAvx2(nil, src)))
-	fmt.Printf("%q\n", base64.StdEncoding.EncodeToString(src))
-	os.Exit(1)
+	////src := []byte("123")
+	////src := []byte("1234567890abcdefgh???!!!...###oooppp")
+	//src := []byte("1234567890")
+	//fmt.Printf("%q\n", string(Base64EncodeAvx2(nil, src)))
+	//fmt.Printf("%q\n", base64.StdEncoding.EncodeToString(src))
+	//os.Exit(1)
 
 	cpuprofile := os.Getenv("CPUPROFILE")
 	if cpuprofile != "" {
@@ -36,20 +39,35 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	const totalSize = 1024 * 1024
-	//const totalSize = 1024 * 1024 * 1024
-
 	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <algo> <size>\n", os.Args[0])
+		log.Fatalf("Usage: %s <algo> <size> <total-size>\n", os.Args[0])
 	}
 	algos := strings.Split(os.Args[1], ",")
 	baseSize, err := strconv.Atoi(os.Args[2])
 	if err != nil {
 		log.Fatalf("Can't parse size %q\n", err)
 	}
+	var totalSize int
+	if len(os.Args) >= 4 {
+		if os.Args[3] == "l2" {
+			totalSize = 256 * 1024
+		} else if os.Args[3] == "ram" {
+			totalSize = 128 * 1024 * 1024
+		} else {
+			totalSize, err = strconv.Atoi(os.Args[3])
+			if err != nil {
+				log.Fatalf("Can't parse total-size %q\n", err)
+			}
+		}
+	} else {
+		totalSize = 256 * 1024
+	}
 
-	log.Printf("Generating samples...\n")
+	log.Printf("Generating samples (%d bytes in total)...\n", totalSize)
 	samples := generateSamples(baseSize, totalSize)
+	if len(samples) == 0 {
+		log.Fatalf("Not enough total size for given size\n")
+	}
 	var encodedSamples [][]byte
 	for _, sample := range samples {
 		encodedSamples = append(encodedSamples, base64.StdEncoding.AppendEncode(nil, sample))
@@ -121,7 +139,7 @@ func benchEncoding(samples [][]byte, encodedSamples [][]byte, encodedOutput [][]
 ) {
 	startTime := time.Now()
 	count := 0
-	for time.Since(startTime) < time.Second {
+	for time.Since(startTime) < benchAtLeast {
 		for i := range samples {
 			encodedOutput[i] = encode(encodedOutput[i][:0], samples[i])
 		}
@@ -132,12 +150,12 @@ func benchEncoding(samples [][]byte, encodedSamples [][]byte, encodedOutput [][]
 	}
 	dt := time.Since(startTime) / time.Duration(count)
 
-	//for i := range samples {
-	//	if !bytes.Equal(encodedOutput[i], encodedSamples[i]) {
-	//		log.Fatalf("Encoding with %s failed for %v: %q instead of %q\n", algo, samples[i], string(encodedOutput[i]),
-	//			string(encodedSamples[i]))
-	//	}
-	//}
+	for i := range samples {
+		if !bytes.Equal(encodedOutput[i], encodedSamples[i]) {
+			log.Fatalf("Encoding with %s failed for %v: %q instead of %q\n", algo, samples[i], string(encodedOutput[i]),
+				string(encodedSamples[i]))
+		}
+	}
 
 	totalSize := 0
 	for i := range samples {
@@ -151,7 +169,7 @@ func benchDecoding(samples [][]byte, decodedSamples [][]byte, output [][]byte, a
 ) {
 	startTime := time.Now()
 	count := 0
-	for time.Since(startTime) < time.Second {
+	for time.Since(startTime) < benchAtLeast {
 		for i := range samples {
 			output[i] = decode(output[i][:0], samples[i])
 		}
@@ -176,22 +194,22 @@ func benchDecoding(samples [][]byte, decodedSamples [][]byte, output [][]byte, a
 	log.Printf("Decoded with %s in %dMb/sec\n", algo, int(float64(totalSize)/(dt.Seconds()*1024*1024)))
 }
 
-type fixedRandSource struct {
-}
-
-func (f fixedRandSource) Uint64() uint64 {
-	return 1234
-}
-
 func generateSamples(baseSize int, totalSize int) [][]byte {
 	var result [][]byte
 	size := 0
-	rnd := rand.New(fixedRandSource{})
-	for size < totalSize {
+	rnd := rand.New(rand.NewPCG(1234, 5678))
+	for {
 		nextSize := baseSize + rnd.IntN(baseSize)/10
+		if size+nextSize > totalSize {
+			break
+		}
 		size += nextSize
 		buf := make([]byte, nextSize)
-		for i := 0; i < nextSize; i++ {
+		alignedSize := (nextSize / 8) * 8
+		for i := 0; i < alignedSize; i += 8 {
+			*(*uint64)(unsafe.Pointer(&buf[i])) = rnd.Uint64()
+		}
+		for i := alignedSize; i < nextSize; i++ {
 			buf[i] = byte(rnd.IntN(256))
 		}
 		result = append(result, buf)

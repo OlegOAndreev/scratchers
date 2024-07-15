@@ -9,17 +9,10 @@ DATA setTopBit<>(SB)/1, $0x70
 GLOBL setTopBit<>(SB), RODATA, $1
 DATA nextMap<>(SB)/1, $0x10
 GLOBL nextMap<>(SB), RODATA, $1
-DATA const0<>(SB)/8, $0
-GLOBL const0<>(SB), RODATA, $8
-DATA const1<>(SB)/8, $1
-GLOBL const1<>(SB), RODATA, $8
-DATA const24<>(SB)/8, $24
-GLOBL const24<>(SB), RODATA, $8
-DATA const32<>(SB)/8, $32
-GLOBL const32<>(SB), RODATA, $8
 
 // '='
-#define padding 61
+#define padding 0x3d000000
+#define doublePadding 0x3d3d0000
 
 TEXT ·base64EncodeAvx2Asm(SB), $0-40
     MOVQ dst+0(FP), DI
@@ -83,24 +76,25 @@ plain_tail:
     MOVQ AX, R10
     ANDQ $63, R10
     MOVBLZX (R8)(R10*1), R11
-    SHLQ $16, R11
+    SHLQ $24, R11
 
     MOVQ AX, R10
     SHRQ $6, R10
     ANDQ $63, R10
     MOVBLZX (R8)(R10*1), R12
     SHLQ $16, R12
+    ORQ R12, R11
 
     MOVQ AX, R10
     SHRQ $12, R10
     ANDQ $63, R10
-    MOVB (R8)(R10*1), R11
-    SHLQ $8, R11
+    MOVBLZX (R8)(R10*1), R13
+    SHLQ $8, R13
+    ORQ R13, R11
 
     SHRQ $18, AX
-    MOVB (R8)(AX*1), R12
+    MOVB (R8)(AX*1), R11
 
-    ORQ R12, R11
     MOVL R11, (DI)
 
     ADDQ $3, SI
@@ -113,7 +107,6 @@ plain_remainder:
 
     // DX = 2
     MOVL $padding, R11
-    SHLQ $8, R11
 
     MOVBLZX (SI), AX
     SHLQ $8, AX
@@ -122,14 +115,16 @@ plain_remainder:
     MOVQ AX, R10
     SHLQ $2, R10
     ANDQ $63, R10
-    MOVB (R8)(R10*1), R11
-    SHLQ $8, R11
+    MOVBLZX (R8)(R10*1), R12
+    SHLQ $16, R12
+    ORQ R12, R11
 
     MOVQ AX, R10
     SHRQ $4, R10
     ANDQ $63, R10
-    MOVB (R8)(R10*1), R11
-    SHLQ $8, R11
+    MOVBLZX (R8)(R10*1), R13
+    SHLQ $8, R13
+    ORQ R13, R11
 
     SHRQ $10, AX
     MOVB (R8)(AX*1), R11
@@ -141,18 +136,16 @@ plain_remainder:
 
 plain_remainder_1:
     // DX = 1
-    MOVL $padding, R11
-    SHLQ $8, R11
-    MOVB $padding, R11
-    SHLQ $8, R11
+    MOVL $doublePadding, R11
 
     MOVBLZX (SI), AX
 
     MOVQ AX, R10
     SHLQ $4, R10
     ANDQ $63, R10
-    MOVB (R8)(R10*1), R11
-    SHLQ $8, R11
+    MOVBLZX (R8)(R10*1), R12
+    SHLQ $8, R12
+    ORQ R12, R11
 
     SHRQ $2, AX
     MOVB (R8)(AX*1), R11
@@ -189,8 +182,9 @@ simd_main_loop:
 
     // Load 8 triples by doing to overlapping loads, shuffle into 8 quads (and swap byte order for shifts). PDEP may
     // be more suitable for this, but it has horrible latency in Zen2, so let's stick to the AVX2.
-    MOVOU (SI), X0
+    VMOVDQU (SI), X0
     VINSERTI128 $1, 12(SI), Y0, Y0
+
     VPSHUFB Y6, Y0, Y0
     VPSRLD $4, Y0, Y1
     VPAND Y7, Y1, Y1
@@ -238,9 +232,9 @@ simd_main_loop:
 simd_tail:
     // CX = 1..10 remaining triples. The main problem is not doing out-of-bounds loads. Depending on the CX:
     //  1..4: single XMM load aligned with the end (the buffer contains at least 6 triples)
-    //  5: two XMM loads: one aligned with the end and one with one triple delta
+    //  5: two XMM loads: one aligned with the end triple and one with prev triple
     //  6..8: two XMM loads: one aligned with the start of remainder and one aligned with the end
-    //  9: first 8 triples are processed and then the last triple is processed by looping to the remainder
+    //  9: first 8 triples are processed and then the last triple is processed by looping to the 1..4 case
     // All cases are processed by the same code, the only difference in the prolog: input must be in Y0,
     // the destinations for two processed halves in R11 and R12, SI and DI updated accordingly.
 
@@ -251,18 +245,22 @@ simd_tail:
     CMPQ CX, $5
     JB simd_tail_1_4
     JE simd_tail_5
-
-    // CX = 6..9
-    // Special processing for 9 remaining triples.
     CMPQ CX, $9
-    CMOVQNE const0<>(SB), CX
-    CMOVQEQ const1<>(SB), CX
-    CMOVQEQ const24<>(SB), R9
-    CMOVQEQ const32<>(SB), R10
+    JB simd_tail_6_8
 
-    MOVOU (SI), X0
+    // CX = 9. Fix the byte sizes and remaining triples and pass to 6..8.
+    MOVQ $1, CX
+    MOVQ $24, R9
+    MOVQ $32, R10
+    JMP simd_tail_6_8_main
+
+simd_tail_6_8:
+    // CX = 6..8
+    XORQ CX, CX
+simd_tail_6_8_main:
+    VMOVDQU (SI), X0
     ADDQ R9, SI
-    MOVOU -16(SI), X1
+    VMOVDQU -16(SI), X1
     VPSRLDQ $4, X1, X1
     VINSERTI128 $1, X1, Y0, Y0
 
@@ -276,7 +274,7 @@ simd_tail_5:
     // CX = 5
     XORQ CX, CX
 
-    MOVOU -4(SI), X0
+    VMOVDQU -4(SI), X0
     VINSERTI128 $1, -1(SI), Y0, Y0
     VPSRLDQ $4, Y0, Y0
     ADDQ R9, SI
@@ -330,7 +328,7 @@ simd_tail_main:
     VPOR Y5, Y4, Y4
     VPOR Y4, Y2, Y2
 
-    MOVOU X2, (R11)
+    VMOVDQU X2, (R11)
     VEXTRACTI128 $1, Y2, (R12)
 
     // Special processing for 9 remaining triples
