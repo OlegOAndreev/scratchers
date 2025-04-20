@@ -2,8 +2,7 @@
 
 use std::arch::asm;
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::{vaddq_f32, vdupq_n_f32, vfmaq_f32, vst1q_f32};
-use std::arch::aarch64::vld1q_f32;
+use std::arch::aarch64::{vaddq_f32, vdupq_n_f32, vfmaq_f32, vld1q_f32, vst1q_f32};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use std::arch::x86_64::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps,
