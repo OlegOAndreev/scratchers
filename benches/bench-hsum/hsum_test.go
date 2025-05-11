@@ -130,11 +130,17 @@ func TestHorizontalAdd(t *testing.T) {
 	t.Run("HorizontalSumUnroll", func(t *testing.T) {
 		testHorizontalAdd(t, HorizontalSumUnroll)
 	})
-	t.Run("HorizontalSumNibbles", func(t *testing.T) {
-		testHorizontalAdd(t, HorizontalSumNibbles)
+	t.Run("HorizontalSumInt8ToInt16", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumInt8ToInt16)
 	})
-	t.Run("HorizontalSumNibblesUnsafe", func(t *testing.T) {
-		testHorizontalAdd(t, HorizontalSumNibblesUnsafe)
+	t.Run("HorizontalSumInt8ToInt16Unsafe", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumInt8ToInt16Unsafe)
+	})
+	t.Run("HorizontalSumInt4ToInt8", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumInt4ToInt8)
+	})
+	t.Run("HorizontalSumInt4ToInt8Unsafe", func(t *testing.T) {
+		testHorizontalAdd(t, HorizontalSumInt4ToInt8Unsafe)
 	})
 	if avx2Enabled {
 		t.Run("HorizontalSumAvx2", func(t *testing.T) {
@@ -185,11 +191,14 @@ func TestHorizontalAddRandom(t *testing.T) {
 	t.Run("HorizontalSumUnroll", func(t *testing.T) {
 		testHorizontalAddRandom(t, HorizontalSumUnroll, buf)
 	})
-	t.Run("HorizontalSumNibbles", func(t *testing.T) {
-		testHorizontalAddRandom(t, HorizontalSumNibbles, buf)
+	t.Run("HorizontalSumInt8ToInt16", func(t *testing.T) {
+		testHorizontalAddRandom(t, HorizontalSumInt8ToInt16, buf)
 	})
-	t.Run("HorizontalSumNibblesUnsafe", func(t *testing.T) {
-		testHorizontalAddRandom(t, HorizontalSumNibblesUnsafe, buf)
+	t.Run("HorizontalSumInt4ToInt8", func(t *testing.T) {
+		testHorizontalAddRandom(t, HorizontalSumInt4ToInt8, buf)
+	})
+	t.Run("HorizontalSumInt4ToInt8Unsafe", func(t *testing.T) {
+		testHorizontalAddRandom(t, HorizontalSumInt4ToInt8Unsafe, buf)
 	})
 	if avx2Enabled {
 		t.Run("HorizontalSumAvx2", func(t *testing.T) {

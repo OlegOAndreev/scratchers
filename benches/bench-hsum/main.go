@@ -81,8 +81,10 @@ func bench(buf []byte, indices []pair, total uint64) {
 	funcs := []benchFunc{
 		{"HorizontalSumNaive (warmup)", HorizontalSumNaive},
 		{"HorizontalSumUnroll", HorizontalSumUnroll},
-		{"HorizontalSumNibbles", HorizontalSumNibbles},
-		{"HorizontalSumNibblesUnsafe", HorizontalSumNibblesUnsafe},
+		{"HorizontalSumInt8ToInt16", HorizontalSumInt8ToInt16},
+		{"HorizontalSumInt8ToInt16Unsafe", HorizontalSumInt8ToInt16Unsafe},
+		{"HorizontalSumInt4ToInt8", HorizontalSumInt4ToInt8},
+		{"HorizontalSumInt4ToInt8Unsafe", HorizontalSumInt4ToInt8Unsafe},
 	}
 	if avx2Enabled {
 		funcs = append(funcs, benchFunc{"HorizontalSumAvx2", HorizontalSumAvx2})
