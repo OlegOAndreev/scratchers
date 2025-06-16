@@ -295,8 +295,8 @@ fn interleave_stereo(left: &[f32], right: &[f32], stereo: &mut [(f32, f32)]) {
 #[cfg(feature = "oddio")]
 struct BenchOddioInput {
     rate: i32,
-    scene: oddio::SplitSignal<oddio::SpatialScene>,
-    scene_handle: oddio::Handle<oddio::SpatialScene>,
+    scene: oddio::SpatialScene,
+    scene_control: oddio::SpatialSceneControl,
     frames: Vec<Arc<oddio::Frames<f32>>>,
     num_srcs: usize,
     out: Vec<[f32; 2]>,
@@ -304,7 +304,7 @@ struct BenchOddioInput {
 
 #[cfg(feature = "oddio")]
 fn prepare_oddio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> BenchOddioInput {
-    let (scene_handle, scene) = oddio::split(oddio::SpatialScene::new());
+    let (scene_control, scene) = oddio::SpatialScene::new();
     let mut frames = vec![];
     for data in src_data {
         let (frames_data, sample_rate) = read_audio(data).unwrap();
@@ -315,7 +315,7 @@ fn prepare_oddio_input(rate: i32, src_data: Vec<&[u8]>, num_srcs: usize) -> Benc
     BenchOddioInput {
         rate,
         scene,
-        scene_handle,
+        scene_control,
         frames,
         num_srcs,
         out,
@@ -328,8 +328,9 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
     for i in 0..input.num_srcs {
         let frames_signal = oddio::FramesSignal::from(input.frames[i % input.frames.len()].clone());
         // Copy controls from rodio. Stop is already included, see SpatialSceneControl.
-        let signal = oddio::Speed::new(oddio::Gain::new(frames_signal));
-        handles.push(input.scene_handle.control().play_buffered(
+        let (_, signal) = oddio::Gain::new(frames_signal);
+        let (_, signal) = oddio::Speed::new(signal);
+        handles.push(input.scene_control.play_buffered(
             signal,
             oddio::SpatialOptions {
                 position: [0.0, 0.0, 0.0].into(),
@@ -346,7 +347,7 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
     for i in (0..input.out.len()).step_by(BUF_SIZE) {
         let (listener_x, listener_y) = (i as f32 * 0.01).sin_cos();
         for h in &mut handles {
-            h.control::<oddio::SpatialBuffered<_>, _>().set_motion(
+            h.set_motion(
                 [listener_x, listener_y, 0.0].into(),
                 [0.0, 0.0, 0.0].into(),
                 false,
@@ -355,7 +356,7 @@ fn bench_play_oddio(mut input: BenchOddioInput) {
 
         let end = (i + BUF_SIZE).min(input.out.len());
         let buf_len = end - i;
-        oddio::run(&input.scene, input.rate as u32, &mut buf[0..buf_len]);
+        oddio::run(&mut input.scene, input.rate as u32, &mut buf[0..buf_len]);
         input.out[i..end].copy_from_slice(&buf[0..buf_len]);
     }
 
