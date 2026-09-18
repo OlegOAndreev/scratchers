@@ -54,13 +54,13 @@ var searchMethods = []struct {
 	{"searchCSVReader", searchCSVReader},
 	{"searchCSVReaderPerLine", searchCSVReaderPerLine},
 	{"searchBytes", searchBytes},
+	{"searchBytesCsvReader", searchBytesCsvReader},
 }
 
 // Create one csv reader per file.
 func searchCSVReader(data []byte, needle []byte, columnIdx int) (string, error) {
 	csvR := csv.NewReader(bytes.NewReader(data))
 	csvR.Comma = '\t'
-	csvR.LazyQuotes = true
 	csvR.ReuseRecord = true
 
 	needleStr := string(needle)
@@ -100,7 +100,6 @@ func searchCSVReaderPerLine(data []byte, needle []byte, columnIdx int) (string, 
 		line := data[lineStart:lineEnd]
 		csvR := csv.NewReader(bytes.NewReader(line))
 		csvR.Comma = '\t'
-		csvR.LazyQuotes = true
 		rec, err := csvR.Read()
 		if err != nil {
 			// This should never return io.EOF
@@ -146,6 +145,49 @@ func searchBytes(data []byte, needle []byte, columnIdx int) (string, error) {
 			}
 			result = string(data[lineStart:lineEnd])
 		}
+		pos++
+	}
+	return result, nil
+}
+
+// Search the needle using bytes.Index and then reconstruct the line around it. The final line is parsed with a
+// temporary csv reader.
+func searchBytesCsvReader(data []byte, needle []byte, columnIdx int) (string, error) {
+	needleStr := string(needle)
+	pos := 0
+	var result string
+	for pos+len(needle) <= len(data) {
+		idx := bytes.Index(data[pos:], needle)
+		if idx == -1 {
+			break
+		}
+		pos += idx
+
+		lineStart := bytes.LastIndexByte(data[:pos], '\n')
+		if lineStart == -1 {
+			lineStart = 0
+		} else {
+			lineStart++
+		}
+
+		lineEnd := bytes.IndexByte(data[pos:], '\n')
+		if lineEnd == -1 {
+			lineEnd = len(data)
+		} else {
+			lineEnd += pos
+		}
+
+		csvR := csv.NewReader(bytes.NewReader(data[lineStart:lineEnd]))
+		csvR.Comma = '\t'
+		rec, err := csvR.Read()
+		if err != nil {
+			// This should never return io.EOF
+			return "", err
+		}
+		if columnIdx < len(rec) && strings.Contains(rec[columnIdx], needleStr) {
+			result = string(data[lineStart:lineEnd])
+		}
+
 		pos++
 	}
 	return result, nil
